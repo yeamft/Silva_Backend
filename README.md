@@ -13,10 +13,17 @@ npm run dev
 
 API: http://localhost:3000
 
-## Endpoints
+## API collection
 
-- `GET /health` · `GET /api/v1/health`
-- `/api/v1/auth/*` — config, login, signup (disabled), OTP/TOTP, refresh, me, logout, sessions, password, switch-program, branding, onboarding
+Importable docs live under `docs/`:
+
+| File | Use |
+|------|-----|
+| [`docs/SPX-Farm-OS-Auth.postman_collection.json`](docs/SPX-Farm-OS-Auth.postman_collection.json) | Postman / Insomnia import |
+| [`docs/openapi.yaml`](docs/openapi.yaml) | OpenAPI 3 (Swagger / GitHub preview) |
+| [`docs/auth.http`](docs/auth.http) | VS Code REST Client |
+
+Postman: **Import →** select the `.postman_collection.json` file. Set `baseUrl` if needed (default `http://localhost:3000`). Run **Login** first — tokens are saved automatically.
 
 ## Demo users (after seed)
 

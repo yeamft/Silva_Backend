@@ -1,0 +1,97 @@
+### SPX Farm OS Auth API
+@baseUrl = http://localhost:3000
+@accessToken = {{accessToken}}
+@refreshToken = {{refreshToken}}
+@programId = prg_shecha
+
+### Health
+GET {{baseUrl}}/health
+
+### API Health
+GET {{baseUrl}}/api/v1/health
+
+### Auth config
+GET {{baseUrl}}/api/v1/auth/config
+
+### Login
+# @name login
+POST {{baseUrl}}/api/v1/auth/login
+Content-Type: application/json
+
+{
+  "email": "owner@silva.example",
+  "password": "Password123!"
+}
+
+### Me
+GET {{baseUrl}}/api/v1/auth/me
+Authorization: Bearer {{login.response.body.$.data.accessToken}}
+
+### Refresh
+# @name refresh
+POST {{baseUrl}}/api/v1/auth/refresh
+Content-Type: application/json
+
+{
+  "refreshToken": "{{login.response.body.$.data.refreshToken}}"
+}
+
+### Switch program
+POST {{baseUrl}}/api/v1/auth/switch-program
+Authorization: Bearer {{login.response.body.$.data.accessToken}}
+Content-Type: application/json
+
+{
+  "programId": "{{programId}}"
+}
+
+### Update tenant branding
+PATCH {{baseUrl}}/api/v1/auth/tenant/branding
+Authorization: Bearer {{login.response.body.$.data.accessToken}}
+Content-Type: application/json
+
+{
+  "displayName": "Silva",
+  "branding": { "primaryColor": "#1B4332" }
+}
+
+### Complete onboarding
+POST {{baseUrl}}/api/v1/auth/onboarding/complete
+Authorization: Bearer {{login.response.body.$.data.accessToken}}
+Content-Type: application/json
+
+{
+  "displayName": "Silva",
+  "branding": { "tagline": "Coffee estate OS" }
+}
+
+### List sessions
+GET {{baseUrl}}/api/v1/auth/sessions
+Authorization: Bearer {{login.response.body.$.data.accessToken}}
+
+### Forgot password
+POST {{baseUrl}}/api/v1/auth/password/forgot
+Content-Type: application/json
+
+{
+  "email": "owner@silva.example"
+}
+
+### Change password
+POST {{baseUrl}}/api/v1/auth/password/change
+Authorization: Bearer {{login.response.body.$.data.accessToken}}
+Content-Type: application/json
+
+{
+  "currentPassword": "Password123!",
+  "newPassword": "Password123!"
+}
+
+### Logout
+POST {{baseUrl}}/api/v1/auth/logout
+Authorization: Bearer {{login.response.body.$.data.accessToken}}
+Content-Type: application/json
+
+{
+  "refreshToken": "{{login.response.body.$.data.refreshToken}}"
+}

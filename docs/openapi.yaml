@@ -1,0 +1,297 @@
+openapi: 3.0.3
+info:
+  title: SPX Farm OS Auth API
+  version: 1.0.0
+  description: |
+    Auth scaffold for SPX Farm OS.
+
+    Demo users (after `npm run prisma:seed`), password `Password123!`:
+    - `owner@silva.example`
+    - `principal@spx.example`
+    - `lead@bagro.example`
+servers:
+  - url: http://localhost:3000
+    description: Local
+tags:
+  - name: Health
+  - name: Auth
+  - name: MFA
+  - name: Password
+  - name: Program
+  - name: Sessions
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details:
+              type: array
+              items: {}
+        requestId: { type: string }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken: { type: string }
+    SwitchProgramRequest:
+      type: object
+      required: [programId]
+      properties:
+        programId: { type: string }
+    TenantBrandingRequest:
+      type: object
+      properties:
+        displayName: { type: string }
+        branding:
+          type: object
+          additionalProperties: true
+    ChangePasswordRequest:
+      type: object
+      required: [currentPassword, newPassword]
+      properties:
+        currentPassword: { type: string }
+        newPassword: { type: string, minLength: 8 }
+    ForgotRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+    ResetRequest:
+      type: object
+      required: [token, password]
+      properties:
+        token: { type: string }
+        password: { type: string, minLength: 8 }
+    VerifyOtpRequest:
+      type: object
+      required: [otpChallengeToken, code]
+      properties:
+        otpChallengeToken: { type: string }
+        code: { type: string, minLength: 6, maxLength: 8 }
+        deviceLabel: { type: string }
+    EnrollTotpRequest:
+      type: object
+      required: [enrollmentToken, code]
+      properties:
+        enrollmentToken: { type: string }
+        code: { type: string, minLength: 6, maxLength: 8 }
+
+paths:
+  /health:
+    get:
+      tags: [Health]
+      summary: Liveness
+      responses:
+        "200":
+          description: OK
+  /api/v1/health:
+    get:
+      tags: [Health]
+      summary: API liveness
+      responses:
+        "200":
+          description: OK
+  /api/v1/auth/config:
+    get:
+      tags: [Auth]
+      summary: Auth config
+      responses:
+        "200":
+          description: `{ data: { otpOnLogin } }`
+  /api/v1/auth/login:
+    post:
+      tags: [Auth]
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LoginRequest" }
+            example:
+              email: owner@silva.example
+              password: Password123!
+      responses:
+        "200":
+          description: Tokens + me, or OTP/enrollment challenge
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/v1/auth/signup:
+    post:
+      tags: [Auth]
+      summary: Signup (disabled)
+      responses:
+        "403":
+          description: SIGNUP_DISABLED
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      summary: Refresh tokens
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefreshRequest" }
+      responses:
+        "200":
+          description: New token bundle
+  /api/v1/auth/me:
+    get:
+      tags: [Auth]
+      summary: Current user context
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: User, tenant, programs, permissions
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      summary: Logout / revoke refresh session
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefreshRequest" }
+      responses:
+        "200":
+          description: OK
+  /api/v1/auth/otp/verify:
+    post:
+      tags: [MFA]
+      summary: Verify login OTP
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/VerifyOtpRequest" }
+      responses:
+        "200":
+          description: Tokens + me
+  /api/v1/auth/totp/enroll:
+    post:
+      tags: [MFA]
+      summary: Complete TOTP enrollment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EnrollTotpRequest" }
+      responses:
+        "200":
+          description: Tokens + me
+  /api/v1/auth/password/forgot:
+    post:
+      tags: [Password]
+      summary: Request password reset email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ForgotRequest" }
+      responses:
+        "200":
+          description: Always ok (no email enumeration)
+  /api/v1/auth/password/reset:
+    post:
+      tags: [Password]
+      summary: Reset password with token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResetRequest" }
+      responses:
+        "200":
+          description: OK
+  /api/v1/auth/password/change:
+    post:
+      tags: [Password]
+      summary: Change password while logged in
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChangePasswordRequest" }
+      responses:
+        "200":
+          description: OK
+  /api/v1/auth/switch-program:
+    post:
+      tags: [Program]
+      summary: Switch active program
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SwitchProgramRequest" }
+            example:
+              programId: prg_shecha
+      responses:
+        "200":
+          description: New tokens + active program + me
+  /api/v1/auth/tenant/branding:
+    patch:
+      tags: [Program]
+      summary: Update tenant branding
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TenantBrandingRequest" }
+      responses:
+        "200":
+          description: Updated tenant
+  /api/v1/auth/onboarding/complete:
+    post:
+      tags: [Program]
+      summary: Complete onboarding
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TenantBrandingRequest" }
+      responses:
+        "200":
+          description: Updated tenant
+  /api/v1/auth/sessions:
+    get:
+      tags: [Sessions]
+      summary: List refresh sessions
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Session list
+  /api/v1/auth/sessions/{sessionId}:
+    delete:
+      tags: [Sessions]
+      summary: Revoke a session
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: sessionId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
