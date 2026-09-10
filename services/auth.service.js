@@ -31,7 +31,7 @@ function signAccess(user, sessionId) {
 async function tokenBundle(user, options = {}) {
   const full = await prisma.users.findUnique({
     where: { id: user.id },
-    include: { organization: { include: { vendor: true } }, memberships: true },
+    include: { organization: true },
   });
   const jti = uuid("ses");
   const refreshToken = jwt.sign({ sub: full.id, jti, typ: "refresh" }, env.JWT_REFRESH_SECRET, {
@@ -151,9 +151,9 @@ exports.me = async (user) => {
   await hydrateUserContext(user);
   const full = await prisma.users.findUnique({
     where: { id: user.id },
-    include: { organization: true, memberships: true, activeProgram: true },
+    include: { organization: true, activeProgram: true },
   });
-  const programs = await programService.listPrograms({ organizationId: full.organizationId });
+  const programs = await programService.listPrograms(full);
   return {
     user: userJson(full),
     tenant: {
@@ -174,14 +174,6 @@ exports.me = async (user) => {
         }
       : null,
     programs,
-    memberships: full.memberships.map((m) => ({
-      id: m.id,
-      userId: m.userId,
-      organizationId: m.organizationId,
-      role: m.role,
-      active: m.active,
-      createdAt: m.createdAt.toISOString(),
-    })),
     permissions: permissionsFor(full.role),
     onboardingComplete: Boolean(full.organization?.displayName),
     mfaEnabled: Boolean(full.totpEnrolledAt),

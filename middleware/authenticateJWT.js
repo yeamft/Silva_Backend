@@ -58,7 +58,6 @@ module.exports = async (req, res, next) => {
       role: user.role,
       organizationId: user.organizationId,
       organizationType: user.organization.type,
-      vendorId: ctx.vendorId,
       organization: user.organization,
       activeProgramId: ctx.activeProgramId,
       tenantOrgId: user.organizationId,

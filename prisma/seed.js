@@ -42,19 +42,6 @@ async function main() {
     type: "vendor",
   });
 
-  const vendor = await prisma.vendors.upsert({
-    where: { id: "vnd_bagro" },
-    update: { name: "B-Agro", organizationId: bagro.id, status: "active" },
-    create: {
-      id: "vnd_bagro",
-      organizationId: bagro.id,
-      name: "B-Agro",
-      category: "Field execution",
-      status: "active",
-      isDefaultExecutionPartner: true,
-    },
-  });
-
   const program = await prisma.programs.upsert({
     where: { id: "prg_shecha" },
     update: { name: "Silva Kaffa Coffee Program", slug: "shecha", status: "active" },
@@ -92,7 +79,6 @@ async function main() {
       email: "owner@silva.example",
       role: "silva_owner",
       organizationId: silva.id,
-      vendorId: null,
     },
     {
       id: "usr_spx_principal",
@@ -100,7 +86,6 @@ async function main() {
       email: "principal@spx.example",
       role: "spx_principal",
       organizationId: spx.id,
-      vendorId: null,
     },
     {
       id: "usr_bagro_lead",
@@ -108,7 +93,6 @@ async function main() {
       email: "lead@bagro.example",
       role: "vendor_field_lead",
       organizationId: bagro.id,
-      vendorId: vendor.id,
     },
   ];
 
@@ -119,7 +103,6 @@ async function main() {
         name: u.name,
         role: u.role,
         organizationId: u.organizationId,
-        vendorId: u.vendorId,
         activeProgramId: program.id,
         active: true,
         passwordHash,
@@ -130,17 +113,9 @@ async function main() {
         email: u.email,
         role: u.role,
         organizationId: u.organizationId,
-        vendorId: u.vendorId,
         activeProgramId: program.id,
         active: true,
         passwordHash,
-        memberships: {
-          create: {
-            id: `mem_${u.id}`,
-            organizationId: u.organizationId,
-            role: u.role,
-          },
-        },
       },
     });
   }

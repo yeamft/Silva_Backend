@@ -28,7 +28,19 @@ Password: `Password123!`
 | `principal@spx.example` | SPX principal |
 | `lead@bagro.example` | Vendor field lead |
 
-## Notes
+## Database
 
-- Prisma `schema.prisma` still contains the full historical domain models so existing databases keep working. Application code only uses identity/program/auth tables.
-- Domain seed scripts and Cropfort import tooling were removed from this scaffold.
+Auth-only Prisma schema + a single migration: `20260310120000_auth_init`.
+
+Tables: organizations, users, programs, program_memberships, refresh_sessions, password_reset_tokens.
+
+```bash
+# Fresh DB (wipes data)
+npx prisma migrate reset
+
+# Or apply to empty DB
+npx prisma migrate deploy
+npm run prisma:seed
+```
+
+If you already have the old full-domain database, reset or create a new database — the auth migration is not a drop-in upgrade over the historical migration chain.
