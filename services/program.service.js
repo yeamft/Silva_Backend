@@ -2,6 +2,14 @@ const prisma = require("../config/database");
 const AppError = require("../utils/AppError");
 const { uuid } = require("../utils/ids");
 
+const DEFAULT_RATE_CATEGORIES = [
+  { value: "labour", label: "Labour" },
+  { value: "material", label: "Material" },
+  { value: "machinery", label: "Machinery" },
+  { value: "transport", label: "Transport" },
+  { value: "other", label: "Other" },
+];
+
 function slugify(input) {
   return String(input)
     .toLowerCase()
@@ -24,6 +32,26 @@ function programJson(p, membership) {
   };
 }
 
+function adminProgramJson(p) {
+  return {
+    id: p.id,
+    name: p.name,
+    slug: p.slug,
+    status: p.status,
+    createdByOrgId: p.createdByOrgId,
+    createdAt: p.createdAt.toISOString(),
+    updatedAt: p.updatedAt ? p.updatedAt.toISOString() : null,
+    memberCount: p._count?.memberships ?? 0,
+    farmAreaCount: p._count?.farm_estates ?? 0,
+  };
+}
+
+function assertManagePrograms(user) {
+  if (!["system_admin", "spx_principal"].includes(user.role)) {
+    throw new AppError(403, "FORBIDDEN", "Only platform admins can manage programs");
+  }
+}
+
 async function assertProgramMember(user, programId) {
   const membership = await prisma.program_memberships.findUnique({
     where: {
@@ -36,7 +64,36 @@ async function assertProgramMember(user, programId) {
   return membership;
 }
 
+async function ensureDefaultCategories(programId) {
+  for (const c of DEFAULT_RATE_CATEGORIES) {
+    await prisma.rate_card_categories.upsert({
+      where: { programId_value: { programId, value: c.value } },
+      update: { label: c.label, active: true },
+      create: {
+        id: `rcc_${programId}_${c.value}`,
+        programId,
+        value: c.value,
+        label: c.label,
+        active: true,
+      },
+    });
+  }
+}
+
 exports.listPrograms = async (user) => {
+  if (user.role === "system_admin") {
+    const rows = await prisma.programs.findMany({
+      orderBy: { name: "asc" },
+      include: {
+        memberships: {
+          where: { organizationId: user.organizationId },
+          take: 1,
+        },
+      },
+    });
+    return rows.map((p) => programJson(p, p.memberships[0] || { roleInProgram: "manager" }));
+  }
+
   const memberships = await prisma.program_memberships.findMany({
     where: { organizationId: user.organizationId },
     include: { program: true },
@@ -45,23 +102,41 @@ exports.listPrograms = async (user) => {
   return memberships.map((m) => programJson(m.program, m));
 };
 
+exports.adminListPrograms = async (user) => {
+  assertManagePrograms(user);
+  const rows = await prisma.programs.findMany({
+    orderBy: { name: "asc" },
+    include: {
+      _count: { select: { memberships: true, farm_estates: true } },
+    },
+  });
+  return rows.map(adminProgramJson);
+};
+
 exports.createProgram = async (user, dto) => {
   if (!["silva_owner", "silva_country_manager", "spx_principal", "system_admin"].includes(user.role)) {
     throw new AppError(403, "FORBIDDEN", "Only Silva or SPX admins can create programs.");
   }
-  const base = slugify(dto.slug || dto.name);
-  if (!base) throw new AppError(400, "VALIDATION_ERROR", "Program name is required.");
+  const name = String(dto.name || "").trim();
+  if (!name) throw new AppError(400, "VALIDATION_ERROR", "Program name is required.");
+
+  const base = slugify(dto.slug || name);
+  if (!base) throw new AppError(400, "VALIDATION_ERROR", "Program slug is required.");
   let slug = base;
   let n = 1;
   while (await prisma.programs.findUnique({ where: { slug } })) {
     slug = `${base}-${n++}`;
   }
+
   const roleInProgram = user.organizationType === "silva" ? "owner" : "manager";
+  const status = dto.status === "archived" ? "archived" : "active";
+
   const program = await prisma.programs.create({
     data: {
       id: uuid("prg"),
-      name: dto.name,
+      name,
       slug,
+      status,
       brandingJson: dto.branding || null,
       createdByOrgId: user.organizationId,
       memberships: {
@@ -73,11 +148,89 @@ exports.createProgram = async (user, dto) => {
       },
     },
   });
-  await prisma.users.update({ where: { id: user.id }, data: { activeProgramId: program.id } });
-  return programJson(program, { roleInProgram });
+
+  await ensureDefaultCategories(program.id);
+
+  if (user.role !== "system_admin") {
+    await prisma.users.update({ where: { id: user.id }, data: { activeProgramId: program.id } });
+  }
+
+  const full = await prisma.programs.findUnique({
+    where: { id: program.id },
+    include: { _count: { select: { memberships: true, farm_estates: true } } },
+  });
+  return adminProgramJson(full);
+};
+
+exports.updateProgram = async (user, id, dto) => {
+  assertManagePrograms(user);
+  const existing = await prisma.programs.findUnique({ where: { id } });
+  if (!existing) throw new AppError(404, "NOT_FOUND", "Program not found");
+
+  const name = dto.name !== undefined ? String(dto.name || "").trim() : existing.name;
+  if (!name) throw new AppError(400, "VALIDATION_ERROR", "Program name is required.");
+
+  let slug = existing.slug;
+  if (dto.slug !== undefined || dto.name !== undefined) {
+    const base = slugify(dto.slug || name);
+    if (!base) throw new AppError(400, "VALIDATION_ERROR", "Program slug is required.");
+    slug = base;
+    if (slug !== existing.slug) {
+      let n = 1;
+      let candidate = slug;
+      while (await prisma.programs.findFirst({ where: { slug: candidate, id: { not: id } } })) {
+        candidate = `${slug}-${n++}`;
+      }
+      slug = candidate;
+    }
+  }
+
+  const status =
+    dto.status === undefined ? existing.status : dto.status === "archived" ? "archived" : "active";
+
+  const updated = await prisma.programs.update({
+    where: { id },
+    data: { name, slug, status },
+    include: { _count: { select: { memberships: true, farm_estates: true } } },
+  });
+  return adminProgramJson(updated);
+};
+
+exports.archiveProgram = async (user, id) => {
+  assertManagePrograms(user);
+  const existing = await prisma.programs.findUnique({ where: { id } });
+  if (!existing) throw new AppError(404, "NOT_FOUND", "Program not found");
+  const updated = await prisma.programs.update({
+    where: { id },
+    data: { status: "archived" },
+    include: { _count: { select: { memberships: true, farm_estates: true } } },
+  });
+  return adminProgramJson(updated);
 };
 
 exports.switchProgram = async (user, programId) => {
+  if (user.role === "system_admin") {
+    const program = await prisma.programs.findUnique({ where: { id: programId } });
+    if (!program) throw new AppError(404, "NOT_FOUND", "Program not found");
+    const existing = await prisma.program_memberships.findUnique({
+      where: {
+        programId_organizationId: { programId, organizationId: user.organizationId },
+      },
+    });
+    if (!existing) {
+      await prisma.program_memberships.create({
+        data: {
+          id: uuid("pm"),
+          programId,
+          organizationId: user.organizationId,
+          roleInProgram: "manager",
+        },
+      });
+    }
+    await prisma.users.update({ where: { id: user.id }, data: { activeProgramId: programId } });
+    return programJson(program, { roleInProgram: "manager" });
+  }
+
   await assertProgramMember(user, programId);
   await prisma.users.update({ where: { id: user.id }, data: { activeProgramId: programId } });
   const program = await prisma.programs.findUnique({ where: { id: programId } });

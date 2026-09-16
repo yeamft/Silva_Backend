@@ -215,9 +215,13 @@ exports.resetPassword = async (token, password) => {
     throw new AppError(401, "UNAUTHENTICATED", "Invalid or expired reset token.");
   }
   const hash = await bcrypt.hash(password, env.BCRYPT_ROUNDS);
+  const user = await prisma.users.findUnique({ where: { email: row.email } });
   await prisma.$transaction([
     prisma.users.update({ where: { email: row.email }, data: { passwordHash: hash } }),
     prisma.password_reset_tokens.update({ where: { id: row.id }, data: { used: true } }),
+    ...(user
+      ? [prisma.refresh_sessions.updateMany({ where: { userId: user.id }, data: { revoked: true } })]
+      : []),
   ]);
 };
 
@@ -226,10 +230,13 @@ exports.changePassword = async (user, dto) => {
   if (!found) throw new AppError(404, "NOT_FOUND", "User not found.");
   const ok = await bcrypt.compare(dto.currentPassword, found.passwordHash);
   if (!ok) throw new AppError(400, "INVALID_CREDENTIALS", "Current password is incorrect.");
-  await prisma.users.update({
-    where: { id: user.id },
-    data: { passwordHash: await bcrypt.hash(dto.newPassword, env.BCRYPT_ROUNDS) },
-  });
+  await prisma.$transaction([
+    prisma.users.update({
+      where: { id: user.id },
+      data: { passwordHash: await bcrypt.hash(dto.newPassword, env.BCRYPT_ROUNDS) },
+    }),
+    prisma.refresh_sessions.updateMany({ where: { userId: user.id }, data: { revoked: true } }),
+  ]);
   return { ok: true };
 };
 

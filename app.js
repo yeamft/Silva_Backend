@@ -8,6 +8,9 @@ const env = require("./config/env");
 const { corsOptions, allowedOrigins } = require("./config/cors");
 
 const authRoutes = require("./routes/auth.routes");
+const rateCardRoutes = require("./routes/rateCard.routes");
+const usersRoutes = require("./routes/users.routes");
+const orgMapRoutes = require("./routes/orgMap.routes");
 
 const app = express();
 
@@ -24,10 +27,31 @@ app.use(
 app.use(express.json({ limit: "2mb" }));
 app.use(requestId);
 
-app.get("/health", (req, res) => res.json({ data: { ok: true } }));
-app.get("/api/v1/health", (req, res) => res.json({ data: { ok: true } }));
+app.get("/health", async (_req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ data: { ok: true, db: true } });
+  } catch {
+    res.status(503).json({ data: { ok: false, db: false } });
+  }
+});
+app.get("/api/v1/health", async (_req, res) => {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    res.json({ data: { ok: true, db: true } });
+  } catch {
+    res.status(503).json({ data: { ok: false, db: false } });
+  }
+});
 
 app.use("/api/v1/auth", authRoutes);
+app.use("/api/v1/rate-card", rateCardRoutes);
+app.use("/api/v1/users", usersRoutes);
+app.use("/api/v1/org-map", orgMapRoutes);
+app.use("/api/v1/programs", require("./routes/programs.routes"));
+app.use("/api/v1/notifications", require("./routes/notifications.routes"));
+
+
 
 app.use((req, res) => {
   res.status(404).json({

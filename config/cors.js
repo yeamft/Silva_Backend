@@ -18,7 +18,10 @@ function buildAllowedOrigins() {
   if (env.NODE_ENV !== "production") {
     origins.add("http://localhost:3000");
     origins.add("http://localhost:3001");
+    origins.add("http://localhost:8080");
     origins.add("http://127.0.0.1:3000");
+    origins.add("http://127.0.0.1:3001");
+    origins.add("http://127.0.0.1:8080");
   }
 
   return [...origins].filter(Boolean);

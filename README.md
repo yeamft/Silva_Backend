@@ -7,11 +7,15 @@ Express + Prisma backend. Current surface is **auth only** (login, MFA, sessions
 ```bash
 npm install
 npx prisma generate
-npm run prisma:seed   # optional demo users
+npx prisma migrate deploy   # or migrate reset on fresh DB
+npm run prisma:seed
 npm run dev
 ```
 
-API: http://localhost:3000
+API: http://localhost:3000  
+Client (JWT): set `NEXT_PUBLIC_API_BASE_URL=http://localhost:3000/api/v1` and allow CORS for `http://localhost:8080`.
+
+Auth uses access + refresh JWTs. Protected routes require `Authorization: Bearer <accessToken>`. Refresh tokens rotate on use; password change/reset revokes all sessions.
 
 ## API collection
 
@@ -32,8 +36,11 @@ Password: `Password123!`
 | Email | Role |
 |-------|------|
 | `owner@silva.example` | Silva owner |
-| `principal@spx.example` | SPX principal |
+| `admin@spx.example` | System admin |
+| `principal@spx.example` | SPX account manager |
 | `lead@bagro.example` | Vendor field lead |
+
+Demo programs (workspaces): **Silva Kaffa Coffee Program**, **Chaka Buna Estate**.
 
 ## Database
 

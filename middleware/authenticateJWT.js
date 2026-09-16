@@ -4,28 +4,8 @@ const prisma = require("../config/database");
 const AppError = require("../utils/AppError");
 const { hydrateUserContext } = require("../services/userContext.service");
 
-const PUBLIC = new Set([
-  "POST /auth/login",
-  "POST /auth/signup",
-  "POST /auth/refresh",
-  "POST /auth/otp/verify",
-  "POST /auth/totp/enroll",
-  "POST /auth/password/forgot",
-  "POST /auth/password/reset",
-  "GET /auth/config",
-]);
-
-function isPublic(req) {
-  const path = req.path.replace(/^\/api\/v1/, "") || "/";
-  if (PUBLIC.has(`${req.method} ${path}`)) return true;
-  if (path === "/health" || req.path === "/health") return true;
-  return false;
-}
-
 module.exports = async (req, res, next) => {
   try {
-    if (isPublic(req)) return next();
-
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith("Bearer ")) {
       return next(new AppError(401, "UNAUTHENTICATED", "Missing or invalid Authorization header"));
@@ -40,13 +20,42 @@ module.exports = async (req, res, next) => {
       return next(new AppError(401, "UNAUTHENTICATED", "Invalid or expired token"));
     }
 
+    if (decoded.typ && decoded.typ !== "access") {
+      return next(new AppError(401, "UNAUTHENTICATED", "Invalid access token"));
+    }
+
     const userId = decoded.userId || decoded.sub;
+    if (!userId) {
+      return next(new AppError(401, "UNAUTHENTICATED", "Invalid or expired token"));
+    }
+
+    if (decoded.sessionId) {
+      const session = await prisma.refresh_sessions.findFirst({
+        where: {
+          id: decoded.sessionId,
+          userId,
+          revoked: false,
+          expiresAt: { gt: new Date() },
+        },
+        select: { id: true, otpVerifiedAt: true },
+      });
+      if (!session) {
+        return next(new AppError(401, "UNAUTHENTICATED", "Session revoked or expired"));
+      }
+      if (env.OTP_ON_LOGIN && !session.otpVerifiedAt) {
+        return next(new AppError(401, "UNAUTHENTICATED", "MFA verification required"));
+      }
+    }
+
     const user = await prisma.users.findUnique({
       where: { id: userId },
       include: { organization: true },
     });
     if (!user || !user.active) {
       return next(new AppError(401, "UNAUTHENTICATED", "Invalid or expired token"));
+    }
+    if (user.organization?.status === "suspended") {
+      return next(new AppError(403, "FORBIDDEN", "Organization is suspended."));
     }
 
     const ctx = await hydrateUserContext(user);
