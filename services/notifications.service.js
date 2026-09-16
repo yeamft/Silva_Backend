@@ -88,27 +88,88 @@ async function acknowledgeAll(user) {
   return { ok: true };
 }
 
-async function findSilvaRecipients(programId) {
-  const [byActiveProgram, byCropfortRole] = await Promise.all([
+async function findAssetOwnerRecipients(programId) {
+  const silvaRoles = ["silva_owner", "silva_country_manager", "silva_finance"];
+  const cropfortOwnerRoles = ["farm_owner", "farm_owner_viewer"];
+
+  const [byActiveProgram, byCropfortRole, estateOwnerOrgs, assetOwners] = await Promise.all([
     prisma.users.findMany({
       where: {
         active: true,
+        accountStatus: { not: "suspended" },
         activeProgramId: programId,
-        role: { in: ["silva_owner", "silva_country_manager", "silva_finance"] },
+        role: { in: silvaRoles },
       },
-      select: { id: true, role: true },
+      select: { id: true, role: true, email: true },
     }),
     prisma.cropfort_user_roles.findMany({
-      where: { programId, role: { in: ["farm_owner", "farm_owner_viewer"] } },
-      select: { userId: true, users: { select: { id: true, role: true, active: true } } },
+      where: { programId, role: { in: cropfortOwnerRoles } },
+      select: {
+        userId: true,
+        users: { select: { id: true, role: true, active: true, accountStatus: true, email: true } },
+      },
     }),
+    prisma.farm_estates.findMany({
+      where: { programId, status: "active", ownerOrganizationId: { not: null } },
+      select: { ownerOrganizationId: true },
+    }),
+    prisma.asset_owners.findMany({
+      where: {
+        contactEmail: { not: null },
+        farm_estate_asset_owners: { some: { farm_estates: { programId } } },
+      },
+      select: { contactEmail: true },
+    }),
+  ]);
+
+  const ownerOrgIds = [
+    ...new Set(estateOwnerOrgs.map((e) => e.ownerOrganizationId).filter(Boolean)),
+  ];
+  const ownerEmails = [
+    ...new Set(
+      assetOwners
+        .map((a) => String(a.contactEmail || "").trim().toLowerCase())
+        .filter(Boolean),
+    ),
+  ];
+
+  const [byOwnerOrg, byAssetEmail] = await Promise.all([
+    ownerOrgIds.length
+      ? prisma.users.findMany({
+          where: {
+            active: true,
+            accountStatus: { not: "suspended" },
+            organizationId: { in: ownerOrgIds },
+            OR: [
+              { role: { in: silvaRoles } },
+              { cropfort_user_roles: { some: { programId, role: { in: cropfortOwnerRoles } } } },
+            ],
+          },
+          select: { id: true, role: true },
+        })
+      : Promise.resolve([]),
+    ownerEmails.length
+      ? prisma.users.findMany({
+          where: {
+            active: true,
+            accountStatus: { not: "suspended" },
+            email: { in: ownerEmails },
+          },
+          select: { id: true, role: true },
+        })
+      : Promise.resolve([]),
   ]);
 
   const map = new Map();
   for (const u of byActiveProgram) map.set(u.id, u.role);
   for (const row of byCropfortRole) {
-    if (row.users?.active) map.set(row.users.id, row.users.role || "silva_owner");
+    if (row.users?.active && row.users.accountStatus !== "suspended") {
+      map.set(row.users.id, row.users.role || "silva_owner");
+    }
   }
+  for (const u of byOwnerOrg) map.set(u.id, u.role || "silva_owner");
+  for (const u of byAssetEmail) map.set(u.id, u.role || "silva_owner");
+
   return [...map.entries()].map(([id, role]) => ({ id, role }));
 }
 
@@ -131,18 +192,38 @@ async function notifyUsers({ programId, triggerType, entityType, entityId, messa
 }
 
 async function notifyRateCardSubmitted(programId, count, batchKey) {
-  const recipients = await findSilvaRecipients(programId);
-  return notifyUsers({
+  const recipients = await findAssetOwnerRecipients(programId);
+  const message =
+    count === 1
+      ? "1 rate card line is awaiting your approval"
+      : `${count} rate card lines are awaiting your approval`;
+
+  const userIds = await notifyUsers({
     programId,
     triggerType: "rate_card.submitted",
     entityType: "rate_card_batch",
     entityId: batchKey,
-    message:
-      count === 1
-        ? "1 rate card line is awaiting your approval"
-        : `${count} rate card lines are awaiting your approval`,
+    message,
     recipients,
   });
+
+  // If no named asset-owner users were found, fall back to role broadcasts.
+  if (recipients.length > 0) return userIds;
+
+  const roleRows = ["silva_owner", "silva_country_manager"].map((role) => ({
+    id: uuid("ntf"),
+    programId: programId || null,
+    triggerType: "rate_card.submitted",
+    entityType: "rate_card_batch",
+    entityId: batchKey,
+    recipientRole: role,
+    recipientUserId: null,
+    message,
+    sentAt: new Date(),
+    acknowledged: false,
+  }));
+  await prisma.notifications.createMany({ data: roleRows });
+  return roleRows.map((r) => r.id);
 }
 
 async function notifyRateCardDecision(programId, line, decision, actorName) {

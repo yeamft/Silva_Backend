@@ -479,8 +479,8 @@ async function submitLines(user, input = {}) {
       drafts.length,
       `batch_${Date.now()}`,
     );
-  } catch {
-    // Notification failure must not block submit.
+  } catch (err) {
+    console.error("[rate-card] notifyRateCardSubmitted failed:", err?.message || err);
   }
 
   return { submitted: drafts.length };

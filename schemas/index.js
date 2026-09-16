@@ -156,6 +156,12 @@ const adminProgramUpdate = z.object({
   status: z.enum(["active", "archived"]).optional(),
 });
 
+const acceptInvite = z.object({
+  token: z.string().min(1),
+  name: z.string().min(1).optional(),
+  password: z.string().min(8),
+});
+
 module.exports = {
   login,
   refresh,
@@ -180,4 +186,5 @@ module.exports = {
   orgMapBlock,
   adminProgram,
   adminProgramUpdate,
+  acceptInvite,
 };

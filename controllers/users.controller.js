@@ -12,7 +12,7 @@ exports.meta = catchAsync(async (req, res) => {
 });
 
 exports.create = catchAsync(async (req, res) => {
-  const data = await usersService.createUser(req.user, req.validatedBody);
+  const data = await usersService.createUser(req.user, req.validatedBody, { req });
   res.status(201).json({ data });
 });
 

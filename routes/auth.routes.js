@@ -20,6 +20,8 @@ router.patch("/tenant/branding", authenticateJWT, validate(schemas.tenantBrandin
 router.post("/onboarding/complete", authenticateJWT, validate(schemas.tenantBranding), authController.completeOnboarding);
 router.post("/password/forgot", rateLimit, validate(schemas.forgot), authController.forgot);
 router.post("/password/reset", rateLimit, validate(schemas.reset), authController.reset);
+router.get("/invite", rateLimit, authController.invitePreview);
+router.post("/invite/accept", rateLimit, validate(schemas.acceptInvite), authController.acceptInvite);
 router.post("/password/change", authenticateJWT, validate(schemas.changePassword), authController.changePassword);
 router.get("/sessions", authenticateJWT, authController.listSessions);
 router.delete("/sessions/:sessionId", authenticateJWT, authController.revokeSession);

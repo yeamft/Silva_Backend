@@ -61,6 +61,18 @@ exports.reset = catchAsync(async (req, res) => {
   res.json({ data: { ok: true } });
 });
 
+exports.invitePreview = catchAsync(async (req, res) => {
+  const usersService = require("../services/users.service");
+  const data = await usersService.getInvitePreview(req.query.token || req.params.token);
+  res.json({ data });
+});
+
+exports.acceptInvite = catchAsync(async (req, res) => {
+  const usersService = require("../services/users.service");
+  const data = await usersService.acceptInvite(req.validatedBody);
+  res.json({ data });
+});
+
 exports.changePassword = catchAsync(async (req, res) => {
   const data = await authService.changePassword(req.user, req.validatedBody);
   res.json({ data });

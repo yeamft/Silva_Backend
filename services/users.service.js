@@ -1,7 +1,9 @@
 const bcrypt = require("bcryptjs");
 const prisma = require("../config/database");
 const AppError = require("../utils/AppError");
-const { uuid, rawToken } = require("../utils/ids");
+const { uuid, rawToken, hashToken } = require("../utils/ids");
+const mail = require("./mail.service");
+const { resolveAppBaseUrl } = require("../utils/appBaseUrl");
 
 const CROPFORT_ROLES = [
   "field_supervisor",
@@ -24,6 +26,8 @@ const PRIMARY_BACKEND_ROLE = {
   farm_owner: "silva_owner",
   spx_platform_admin: "system_admin",
 };
+
+const INVITE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
 
 function assertManage(user) {
   if (user.role !== "system_admin") {
@@ -212,6 +216,61 @@ async function replaceCropfortRoles(userId, roles, tenants) {
   }
 }
 
+async function ensureOrgProgramMemberships(organizationId, tenants) {
+  for (const tenant of tenants) {
+    const programId = tenant.tenantId;
+    const existing = await prisma.program_memberships.findUnique({
+      where: { programId_organizationId: { programId, organizationId } },
+    });
+    if (!existing) {
+      await prisma.program_memberships.create({
+        data: {
+          id: uuid("pm"),
+          programId,
+          organizationId,
+          roleInProgram: "manager",
+        },
+      });
+    }
+  }
+}
+
+async function sendUserInviteEmail({ actor, user, organizationId, roles, appBaseUrl }) {
+  const org = await prisma.organizations.findUnique({ where: { id: organizationId } });
+  const token = rawToken(24);
+  const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
+
+  await prisma.invites.create({
+    data: {
+      id: uuid("inv"),
+      organizationId,
+      email: user.email,
+      role: pickPrimaryBackendRole(roles),
+      status: "pending",
+      tokenHash: hashToken(token),
+      invitedByUserId: actor.id,
+      expiresAt,
+    },
+  });
+
+  const inviteUrl = mail.buildAbsoluteUrl(`/invite?token=${encodeURIComponent(token)}`, appBaseUrl);
+  const mailResult = await mail.sendOrganizationInviteEmail({
+    to: user.email,
+    inviteeEmail: user.email,
+    orgName: org?.name || "Cropfort",
+    role: pickPrimaryBackendRole(roles),
+    invitedByName: actor.name,
+    inviteUrl,
+    appBaseUrl,
+  });
+
+  return {
+    inviteUrl,
+    inviteSent: Boolean(mailResult?.sent),
+    expiresAt: expiresAt.toISOString(),
+  };
+}
+
 async function listUsers(actor) {
   assertManage(actor);
   const rows = await prisma.users.findMany({
@@ -246,15 +305,16 @@ async function getMeta(actor) {
   };
 }
 
-async function createUser(actor, input) {
+async function createUser(actor, input, options = {}) {
   assertManage(actor);
   const data = normalizeInput(input);
   const existing = await prisma.users.findUnique({ where: { email: data.email } });
   if (existing) throw new AppError(409, "CONFLICT", "That email is already registered");
 
   const organizationId = await resolveOrganizationId(data.organization);
-  const temporaryPassword = rawToken(9);
-  const passwordHash = await bcrypt.hash(temporaryPassword, 10);
+  const isInvite = data.status === "invited";
+  const temporaryPassword = isInvite ? null : rawToken(9);
+  const passwordHash = await bcrypt.hash(temporaryPassword || rawToken(24), 10);
   const activeProgramId = data.tenants[0].tenantId;
 
   const created = await prisma.users.create({
@@ -266,24 +326,46 @@ async function createUser(actor, input) {
       role: pickPrimaryBackendRole(data.roles),
       organizationId,
       activeProgramId,
-      active: data.status !== "suspended",
+      // Invited users must accept the email link before they can sign in.
+      active: data.status === "active",
       accountStatus: data.status,
     },
   });
 
+  await ensureOrgProgramMemberships(organizationId, data.tenants);
   await replaceCropfortRoles(created.id, data.roles, data.tenants);
 
   const full = await prisma.users.findUnique({ where: { id: created.id }, include: userInclude });
   const serialized = serializeUser(full);
+
+  let invite = null;
+  if (isInvite) {
+    const appBaseUrl = resolveAppBaseUrl(options.req);
+    invite = await sendUserInviteEmail({
+      actor,
+      user: created,
+      organizationId,
+      roles: data.roles,
+      appBaseUrl,
+    });
+  }
+
   await recordAudit({
     actorId: actor.id,
     programId: activeProgramId,
     entityId: created.id,
-    action: "user.create",
+    action: isInvite ? "user.invite" : "user.create",
     before: null,
-    after: serialized,
+    after: { ...serialized, inviteSent: invite?.inviteSent ?? false },
   });
-  return { user: serialized, temporaryPassword };
+
+  return {
+    user: serialized,
+    temporaryPassword: temporaryPassword || undefined,
+    inviteSent: invite?.inviteSent ?? false,
+    inviteUrl: invite?.inviteUrl,
+    inviteExpiresAt: invite?.expiresAt,
+  };
 }
 
 async function updateUser(actor, id, input) {
@@ -309,11 +391,12 @@ async function updateUser(actor, id, input) {
       role: pickPrimaryBackendRole(data.roles),
       organizationId,
       activeProgramId,
-      active: data.status !== "suspended",
+      active: data.status === "active",
       accountStatus: data.status,
     },
   });
 
+  await ensureOrgProgramMemberships(organizationId, data.tenants);
   await replaceCropfortRoles(id, data.roles, data.tenants);
   const full = await prisma.users.findUnique({ where: { id }, include: userInclude });
   const serialized = serializeUser(full);
@@ -443,6 +526,96 @@ async function getUserAuditTrail(actor, id) {
   }));
 }
 
+async function getInvitePreview(token) {
+  if (!token) throw new AppError(400, "VALIDATION_ERROR", "Invite token is required");
+  const invite = await prisma.invites.findFirst({
+    where: { tokenHash: hashToken(token) },
+    include: {
+      organizations: { select: { id: true, name: true } },
+      users: { select: { id: true, name: true } },
+    },
+  });
+  if (!invite) throw new AppError(404, "NOT_FOUND", "Invitation not found");
+  if (invite.status === "accepted") {
+    throw new AppError(409, "ALREADY_ACCEPTED", "This invitation has already been accepted");
+  }
+  if (invite.status === "revoked") {
+    throw new AppError(410, "REVOKED", "This invitation was revoked");
+  }
+  if (invite.expiresAt.getTime() < Date.now() || invite.status === "expired") {
+    if (invite.status === "pending") {
+      await prisma.invites.update({ where: { id: invite.id }, data: { status: "expired" } });
+    }
+    throw new AppError(410, "EXPIRED", "This invitation has expired");
+  }
+
+  const user = await prisma.users.findUnique({
+    where: { email: invite.email.toLowerCase() },
+    select: { id: true, name: true, email: true, accountStatus: true },
+  });
+
+  return {
+    email: invite.email,
+    name: user?.name || "",
+    orgName: invite.organizations?.name || "Cropfort",
+    role: invite.role,
+    invitedByName: invite.users?.name || null,
+    expiresAt: invite.expiresAt.toISOString(),
+  };
+}
+
+async function acceptInvite({ token, name, password }) {
+  if (!token) throw new AppError(400, "VALIDATION_ERROR", "Invite token is required");
+  if (!password || String(password).length < 8) {
+    throw new AppError(400, "VALIDATION_ERROR", "Password must be at least 8 characters");
+  }
+
+  const invite = await prisma.invites.findFirst({
+    where: { tokenHash: hashToken(token) },
+    include: { organizations: true },
+  });
+  if (!invite) throw new AppError(404, "NOT_FOUND", "Invitation not found");
+  if (invite.status === "accepted") {
+    throw new AppError(409, "ALREADY_ACCEPTED", "This invitation has already been accepted");
+  }
+  if (invite.status === "revoked") {
+    throw new AppError(410, "REVOKED", "This invitation was revoked");
+  }
+  if (invite.expiresAt.getTime() < Date.now()) {
+    await prisma.invites.update({ where: { id: invite.id }, data: { status: "expired" } });
+    throw new AppError(410, "EXPIRED", "This invitation has expired");
+  }
+
+  const user = await prisma.users.findUnique({ where: { email: invite.email.toLowerCase() } });
+  if (!user) throw new AppError(404, "NOT_FOUND", "Invited user account was not found");
+
+  const nextName = String(name || user.name || "").trim();
+  if (!nextName) throw new AppError(400, "VALIDATION_ERROR", "Name is required");
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  await prisma.$transaction([
+    prisma.users.update({
+      where: { id: user.id },
+      data: {
+        name: nextName,
+        passwordHash,
+        active: true,
+        accountStatus: "active",
+      },
+    }),
+    prisma.invites.update({
+      where: { id: invite.id },
+      data: { status: "accepted" },
+    }),
+  ]);
+
+  return {
+    ok: true,
+    email: user.email,
+    name: nextName,
+  };
+}
+
 module.exports = {
   listUsers,
   getMeta,
@@ -453,4 +626,6 @@ module.exports = {
   revokeUserSessions,
   deleteUser,
   getUserAuditTrail,
+  getInvitePreview,
+  acceptInvite,
 };
