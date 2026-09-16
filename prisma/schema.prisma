@@ -241,6 +241,9 @@ model rate_card_lines {
   benchmarkFarmBRate    Decimal?           @db.Decimal(14, 4)
   spxJustificationNote  String?
   status                CropfortLineStatus @default(draft)
+  /** Fiscal year start (e.g. 2026 = FY 2026/27, Jul–Jun). */
+  budgetYear            Int
+  archivedAt            DateTime?
   version               Int                @default(1)
   supersedesId          String?
   effectiveFrom         DateTime?
@@ -260,6 +263,8 @@ model rate_card_lines {
   @@index([programId, status])
   @@index([farmEstateId, status])
   @@index([programId, resourceCode])
+  @@index([programId, budgetYear])
+  @@index([programId, archivedAt])
 }
 
 model accountability_matrix {

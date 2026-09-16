@@ -22,7 +22,12 @@ exports.deleteCategory = catchAsync(async (req, res) => {
 });
 
 exports.listLines = catchAsync(async (req, res) => {
-  const data = await rateCardService.listLines(req.user);
+  const data = await rateCardService.listLines(req.user, req.query || {});
+  res.json({ data });
+});
+
+exports.listBudgetYears = catchAsync(async (req, res) => {
+  const data = await rateCardService.listBudgetYears(req.user);
   res.json({ data });
 });
 
@@ -53,5 +58,15 @@ exports.approveLine = catchAsync(async (req, res) => {
 
 exports.returnLine = catchAsync(async (req, res) => {
   const data = await rateCardService.returnLine(req.user, req.params.id, req.validatedBody.comment);
+  res.json({ data });
+});
+
+exports.archiveBudgetYear = catchAsync(async (req, res) => {
+  const data = await rateCardService.archiveBudgetYear(req.user, req.validatedBody);
+  res.json({ data });
+});
+
+exports.unarchiveBudgetYear = catchAsync(async (req, res) => {
+  const data = await rateCardService.unarchiveBudgetYear(req.user, req.validatedBody);
   res.json({ data });
 });

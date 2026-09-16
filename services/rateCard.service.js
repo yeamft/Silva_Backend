@@ -83,6 +83,31 @@ function toDateOnly(value) {
   return String(value).slice(0, 10);
 }
 
+/** Ethiopian coffee FY starts in July — e.g. Jul 2026 → budgetYear 2026 (FY 2026/27). */
+function currentBudgetYear(date = new Date()) {
+  const year = date.getFullYear();
+  const month = date.getMonth();
+  return month >= 6 ? year : year - 1;
+}
+
+function formatBudgetYearLabel(budgetYear) {
+  const start = Number(budgetYear);
+  if (!Number.isFinite(start)) return String(budgetYear);
+  return `FY ${start}/${String(start + 1).slice(-2)}`;
+}
+
+function parseBudgetYear(value, { required = true } = {}) {
+  if (value == null || value === "") {
+    if (required) throw new AppError(400, "VALIDATION_ERROR", "Budget year is required");
+    return null;
+  }
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 2000 || n > 2100) {
+    throw new AppError(400, "VALIDATION_ERROR", "Budget year must be a valid fiscal year start (e.g. 2026)");
+  }
+  return n;
+}
+
 function parseOptionalDate(value) {
   if (value == null || value === "") return null;
   const d = new Date(value);
@@ -108,6 +133,7 @@ function serializeLine(row) {
   const benchmarkFarmARate = num(row.benchmarkFarmARate);
   const benchmarkFarmBRate = num(row.benchmarkFarmBRate);
   const variance = computeVariance({ rateBirr, benchmarkFarmARate, benchmarkFarmBRate });
+  const budgetYear = Number(row.budgetYear);
   return {
     id: row.id,
     resourceCode: row.resourceCode,
@@ -121,6 +147,9 @@ function serializeLine(row) {
     flagged: variance.flagged,
     justificationNote: row.spxJustificationNote || "",
     status: row.status,
+    budgetYear,
+    budgetYearLabel: formatBudgetYearLabel(budgetYear),
+    archivedAt: row.archivedAt ? row.archivedAt.toISOString() : null,
     effectiveFrom: toDateOnly(row.effectiveFrom),
     effectiveTo: toDateOnly(row.effectiveTo),
     createdAt: row.createdAt.toISOString(),
@@ -243,7 +272,7 @@ async function deleteCategory(user, id) {
   return { ok: true };
 }
 
-async function listLines(user) {
+async function listLines(user, query = {}) {
   assertView(user);
   const programId = requireProgramId(user);
   await ensureDefaultCategories(programId);
@@ -253,11 +282,68 @@ async function listLines(user) {
     where.status = { in: ["submitted", "approved"] };
   }
 
+  const budgetYear = parseBudgetYear(query.budgetYear, { required: false });
+  if (budgetYear != null) {
+    where.budgetYear = budgetYear;
+  }
+
+  const archived = String(query.archived || "active").toLowerCase();
+  if (archived === "active") {
+    where.archivedAt = null;
+  } else if (archived === "archived") {
+    where.archivedAt = { not: null };
+  }
+  // archived === "all" → no archivedAt filter (reference past + current)
+
   const rows = await prisma.rate_card_lines.findMany({
     where,
-    orderBy: { updatedAt: "desc" },
+    orderBy: [{ budgetYear: "desc" }, { updatedAt: "desc" }],
   });
   return rows.map(serializeLine);
+}
+
+async function listBudgetYears(user) {
+  assertView(user);
+  const programId = requireProgramId(user);
+
+  const rows = await prisma.rate_card_lines.groupBy({
+    by: ["budgetYear"],
+    where: { programId },
+    _count: { _all: true },
+  });
+
+  const withArchiveSplit = await Promise.all(
+    rows.map(async (row) => {
+      const [activeCount, archivedCount] = await Promise.all([
+        prisma.rate_card_lines.count({
+          where: { programId, budgetYear: row.budgetYear, archivedAt: null },
+        }),
+        prisma.rate_card_lines.count({
+          where: { programId, budgetYear: row.budgetYear, archivedAt: { not: null } },
+        }),
+      ]);
+      return {
+        budgetYear: row.budgetYear,
+        label: formatBudgetYearLabel(row.budgetYear),
+        total: row._count._all,
+        activeCount,
+        archivedCount,
+      };
+    }),
+  );
+
+  const current = currentBudgetYear();
+  if (!withArchiveSplit.some((y) => y.budgetYear === current)) {
+    withArchiveSplit.push({
+      budgetYear: current,
+      label: formatBudgetYearLabel(current),
+      total: 0,
+      activeCount: 0,
+      archivedCount: 0,
+    });
+  }
+
+  return withArchiveSplit.sort((a, b) => b.budgetYear - a.budgetYear);
 }
 
 function lineWriteData(input) {
@@ -265,12 +351,14 @@ function lineWriteData(input) {
   if (!Number.isFinite(rateBirr) || rateBirr < 0) {
     throw new AppError(400, "VALIDATION_ERROR", "Rate must be a valid number");
   }
+  const budgetYear = parseBudgetYear(input.budgetYear);
   return {
     resourceCode: String(input.resourceCode || "").trim(),
     resourceName: String(input.resourceName || "").trim(),
     resourceType: String(input.category || "").trim(),
     unitOfMeasure: String(input.unitOfMeasure || "").trim(),
     rateEtb: rateBirr,
+    budgetYear,
     benchmarkFarmARate:
       input.benchmarkFarmARate == null || input.benchmarkFarmARate === ""
         ? null
@@ -300,6 +388,7 @@ async function createLine(user, input) {
       programId,
       ...data,
       status: "draft",
+      archivedAt: null,
       createdByUserId: user.id,
     },
   });
@@ -311,6 +400,9 @@ async function updateLine(user, id, input) {
   const programId = requireProgramId(user);
   const existing = await prisma.rate_card_lines.findFirst({ where: { id, programId } });
   if (!existing) throw new AppError(404, "NOT_FOUND", "Rate card line not found");
+  if (existing.archivedAt) {
+    throw new AppError(409, "ARCHIVED", "Archived rates are read-only. Switch budget year or restore from archive first.");
+  }
   if (existing.status === "approved" || existing.status === "submitted") {
     throw new AppError(409, "INVALID_STATE", "Only draft or returned lines can be edited");
   }
@@ -334,6 +426,9 @@ async function deleteLine(user, id) {
   const programId = requireProgramId(user);
   const existing = await prisma.rate_card_lines.findFirst({ where: { id, programId } });
   if (!existing) throw new AppError(404, "NOT_FOUND", "Rate card line not found");
+  if (existing.archivedAt) {
+    throw new AppError(409, "ARCHIVED", "Archived rates cannot be deleted");
+  }
   if (existing.status !== "draft") {
     throw new AppError(409, "INVALID_STATE", "Only draft lines can be deleted");
   }
@@ -346,7 +441,7 @@ async function submitLines(user, input = {}) {
   const programId = requireProgramId(user);
   const ids = Array.isArray(input.ids) ? input.ids.filter(Boolean) : [];
 
-  const where = { programId, status: "draft" };
+  const where = { programId, status: "draft", archivedAt: null };
   if (ids.length > 0) {
     where.id = { in: ids };
   }
@@ -372,6 +467,7 @@ async function submitLines(user, input = {}) {
     where: {
       programId,
       status: "draft",
+      archivedAt: null,
       id: { in: drafts.map((d) => d.id) },
     },
     data: { status: "submitted", submittedAt: new Date() },
@@ -395,6 +491,9 @@ async function approveLine(user, id) {
   const programId = requireProgramId(user);
   const existing = await prisma.rate_card_lines.findFirst({ where: { id, programId } });
   if (!existing) throw new AppError(404, "NOT_FOUND", "Rate card line not found");
+  if (existing.archivedAt) {
+    throw new AppError(409, "ARCHIVED", "Archived rates cannot be approved");
+  }
   if (existing.status !== "submitted") {
     throw new AppError(409, "INVALID_STATE", "Only submitted lines can be approved");
   }
@@ -418,6 +517,9 @@ async function returnLine(user, id, comment) {
   const programId = requireProgramId(user);
   const existing = await prisma.rate_card_lines.findFirst({ where: { id, programId } });
   if (!existing) throw new AppError(404, "NOT_FOUND", "Rate card line not found");
+  if (existing.archivedAt) {
+    throw new AppError(409, "ARCHIVED", "Archived rates cannot be returned");
+  }
   if (existing.status !== "submitted") {
     throw new AppError(409, "INVALID_STATE", "Only submitted lines can be returned");
   }
@@ -433,18 +535,65 @@ async function returnLine(user, id, comment) {
   return serializeLine(updated);
 }
 
+async function archiveBudgetYear(user, input = {}) {
+  assertEdit(user);
+  const programId = requireProgramId(user);
+  const budgetYear = parseBudgetYear(input.budgetYear);
+
+  const result = await prisma.rate_card_lines.updateMany({
+    where: { programId, budgetYear, archivedAt: null },
+    data: { archivedAt: new Date() },
+  });
+
+  if (result.count === 0) {
+    throw new AppError(400, "NOTHING_TO_ARCHIVE", `No active rates found for ${formatBudgetYearLabel(budgetYear)}`);
+  }
+
+  return {
+    budgetYear,
+    label: formatBudgetYearLabel(budgetYear),
+    archived: result.count,
+  };
+}
+
+async function unarchiveBudgetYear(user, input = {}) {
+  assertEdit(user);
+  const programId = requireProgramId(user);
+  const budgetYear = parseBudgetYear(input.budgetYear);
+
+  const result = await prisma.rate_card_lines.updateMany({
+    where: { programId, budgetYear, archivedAt: { not: null } },
+    data: { archivedAt: null },
+  });
+
+  if (result.count === 0) {
+    throw new AppError(400, "NOTHING_TO_RESTORE", `No archived rates found for ${formatBudgetYearLabel(budgetYear)}`);
+  }
+
+  return {
+    budgetYear,
+    label: formatBudgetYearLabel(budgetYear),
+    restored: result.count,
+  };
+}
+
 module.exports = {
   listCategories,
   createCategory,
   updateCategory,
   deleteCategory,
   listLines,
+  listBudgetYears,
   createLine,
   updateLine,
   deleteLine,
   submitLines,
   approveLine,
   returnLine,
+  archiveBudgetYear,
+  unarchiveBudgetYear,
+  currentBudgetYear,
+  formatBudgetYearLabel,
   DEFAULT_CATEGORIES,
   computeVariance,
 };

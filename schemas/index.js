@@ -54,6 +54,7 @@ const rateCardLine = z.object({
   benchmarkFarmARate: optionalNumber,
   benchmarkFarmBRate: optionalNumber,
   justificationNote: z.string().optional().default(""),
+  budgetYear: z.number().int().min(2000).max(2100),
   effectiveFrom: z.union([z.string(), z.null()]).optional(),
   effectiveTo: z.union([z.string(), z.null()]).optional(),
 });
@@ -64,6 +65,10 @@ const rateCardReturn = z.object({
 
 const rateCardSubmit = z.object({
   ids: z.array(z.string().min(1)).min(1, "Select at least one draft line"),
+});
+
+const rateCardArchiveYear = z.object({
+  budgetYear: z.number().int().min(2000).max(2100),
 });
 
 const cropfortRole = z.enum([
@@ -166,6 +171,7 @@ module.exports = {
   rateCardLine,
   rateCardReturn,
   rateCardSubmit,
+  rateCardArchiveYear,
   adminUser,
   orgMapOrganization,
   orgMapFarmArea,
