@@ -65,6 +65,7 @@ module.exports = {
   APP_BASE_URL: process.env.APP_BASE_URL || process.env.CLIENT_URL || "http://localhost:8080",
   CORS_ORIGINS: process.env.CORS_ORIGINS || "",
   MAIL_FROM: process.env.MAIL_FROM || "SPX Farm OS <noreply@localhost>",
+  CONTACT_EMAIL: process.env.CONTACT_EMAIL || process.env.MAIL_TEST_TO || "",
   SMTP_HOST: process.env.SMTP_HOST || "",
   SMTP_PORT: (() => {
     const port = Number(process.env.SMTP_PORT || 587);

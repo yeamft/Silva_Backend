@@ -31,8 +31,18 @@ function serialize(row) {
 }
 
 function hrefFor(row) {
-  if (row.entityType === "rate_card_line" || row.entityType === "rate_card_batch") {
-    return "/cropfort/rate-card";
+  if (row.entityType === "rate_card_proposal") {
+    return `/cropfort/rate-cards/proposals/${row.entityId}`;
+  }
+  if (
+    row.entityType === "rate_card_line" ||
+    row.entityType === "rate_card_batch" ||
+    row.entityType === "rate_card"
+  ) {
+    return "/cropfort/rate-cards/proposals";
+  }
+  if (row.entityType === "benchmark_survey") {
+    return `/cropfort/rate-cards/benchmark-surveys/${row.entityId}`;
   }
   return null;
 }
@@ -249,10 +259,97 @@ async function notifyRateCardDecision(programId, line, decision, actorName) {
   });
 }
 
+async function notifyRateCardProposalSubmitted(programId, proposal) {
+  const recipients = await findAssetOwnerRecipients(programId);
+  const label = proposal.activityName || proposal.activityId || proposal.id;
+  const message = `Rate card “${label}” is awaiting your approval`;
+
+  const userIds = await notifyUsers({
+    programId,
+    triggerType: "rate_card_proposal.submitted",
+    entityType: "rate_card_proposal",
+    entityId: proposal.id,
+    message,
+    recipients,
+  });
+  if (recipients.length > 0) return userIds;
+
+  const roleRows = ["farm_owner", "silva_owner", "silva_country_manager"].map((role) => ({
+    id: uuid("ntf"),
+    programId: programId || null,
+    triggerType: "rate_card_proposal.submitted",
+    entityType: "rate_card_proposal",
+    entityId: proposal.id,
+    recipientRole: role,
+    recipientUserId: null,
+    message,
+    sentAt: new Date(),
+    acknowledged: false,
+  }));
+  await prisma.notifications.createMany({ data: roleRows });
+  return roleRows.map((r) => r.id);
+}
+
+async function notifyRateCardProposalDecision(programId, proposal, decision, actorName) {
+  const creatorId = proposal.createdByUserId;
+  if (!creatorId) return [];
+  const creator = await prisma.users.findFirst({
+    where: { id: creatorId, active: true },
+    select: { id: true, role: true },
+  });
+  if (!creator) return [];
+  const label = proposal.activityName || proposal.activityId || proposal.id;
+  const message =
+    decision === "approved"
+      ? `${actorName || "Silva"} approved rate card “${label}”`
+      : `${actorName || "Silva"} rejected rate card “${label}” — returned for revision`;
+  return notifyUsers({
+    programId,
+    triggerType:
+      decision === "approved" ? "rate_card_proposal.approved" : "rate_card_proposal.returned",
+    entityType: "rate_card_proposal",
+    entityId: proposal.id,
+    message,
+    recipients: [creator],
+  });
+}
+
+async function notifyBenchmarkSurveySubmitted(programId, survey) {
+  const recipients = await findAssetOwnerRecipients(programId);
+  const label = survey.activityName || survey.activityId || survey.id;
+  const message = `Benchmark survey “${label}” was submitted (evidence packet)`;
+  const userIds = await notifyUsers({
+    programId,
+    triggerType: "benchmark_survey.submitted",
+    entityType: "benchmark_survey",
+    entityId: survey.id,
+    message,
+    recipients,
+  });
+  if (recipients.length > 0) return userIds;
+  const roleRows = ["farm_owner", "silva_owner"].map((role) => ({
+    id: uuid("ntf"),
+    programId: programId || null,
+    triggerType: "benchmark_survey.submitted",
+    entityType: "benchmark_survey",
+    entityId: survey.id,
+    recipientRole: role,
+    recipientUserId: null,
+    message,
+    sentAt: new Date(),
+    acknowledged: false,
+  }));
+  await prisma.notifications.createMany({ data: roleRows });
+  return roleRows.map((r) => r.id);
+}
+
 module.exports = {
   listForUser,
   acknowledge,
   acknowledgeAll,
   notifyRateCardSubmitted,
   notifyRateCardDecision,
+  notifyRateCardProposalSubmitted,
+  notifyRateCardProposalDecision,
+  notifyBenchmarkSurveySubmitted,
 };

@@ -82,6 +82,8 @@ model programs {
   ifs_forms                     ifs_forms[]
   item_comments                 item_comments[]
   labor_rate_cards              labor_rate_cards[]
+  material_rate_cards           material_rate_cards[]
+  service_rate_cards            service_rate_cards[]
   message_threads               message_threads[]
   monthly_client_reports        monthly_client_reports[]
   notifications                 notifications[]
@@ -93,6 +95,7 @@ model programs {
   createdByOrg                  organizations               @relation("ProgramCreator", fields: [createdByOrgId], references: [id])
   rateCardCategories            rate_card_categories[]
   rateCardLines                 rate_card_lines[]
+  rate_card_proposals           rate_card_proposals[]
   related_party_disclosures     related_party_disclosures[]
   reports                       reports[]
   schedule3_thresholds          schedule3_thresholds[]
@@ -169,6 +172,8 @@ model users {
   payment_requests_payment_requests_requestedByUserIdTousers           payment_requests[]             @relation("payment_requests_requestedByUserIdTousers")
   payment_requests_payment_requests_spxVerifiedByUserIdTousers         payment_requests[]             @relation("payment_requests_spxVerifiedByUserIdTousers")
   rate_card_lines                                                      rate_card_lines[]
+  rate_card_proposals_rate_card_proposals_approvedByUserIdTousers      rate_card_proposals[]          @relation("rate_card_proposals_approvedByUserIdTousers")
+  rate_card_proposals_rate_card_proposals_createdByUserIdTousers       rate_card_proposals[]          @relation("rate_card_proposals_createdByUserIdTousers")
   refreshSessions                                                      refresh_sessions[]
   registration_requests                                                registration_requests[]
   reports                                                              reports[]
@@ -335,14 +340,32 @@ model activity_master {
   activity_templates      activity_templates?       @relation(fields: [templateId], references: [id])
   afp_block_lines         afp_block_lines[]
   afp_plan_intensities    afp_plan_intensities[]
-  benchmark_surveys       benchmark_surveys[]
   block_field_tickets     block_field_tickets[]
   cropfort_activity_plans cropfort_activity_plans[]
   cropfort_elections      cropfort_elections[]
-  labor_rate_cards        labor_rate_cards[]
 
   @@unique([programId, code, version])
   @@index([programId])
+}
+
+/// Platform-owned Cropfort activity taxonomy (Tier 1/2/3). Not farm- or program-scoped.
+model activities {
+  id                  String               @id
+  tier                Int
+  category            String
+  name                String
+  unitOfMeasure       String
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  benchmark_surveys   benchmark_surveys[]
+  labor_rate_cards    labor_rate_cards[]
+  material_rate_cards material_rate_cards[]
+  service_rate_cards  service_rate_cards[]
+  rate_card_proposals rate_card_proposals[]
+
+  @@index([tier])
+  @@index([category])
+  @@index([tier, category])
 }
 
 model activity_requests {
@@ -586,20 +609,22 @@ model audit_log {
 }
 
 model benchmark_surveys {
-  id                                             String              @id
+  id                                             String               @id
   programId                                      String
   farmEstateId                                   String
   activityId                                     String
   neighbor1Name                                  String?
   neighbor2Name                                  String?
-  neighbor1Rate                                  Decimal?            @db.Decimal(14, 4)
-  neighbor2Rate                                  Decimal?            @db.Decimal(14, 4)
+  neighbor1Rate                                  Decimal?             @db.Decimal(14, 4)
+  neighbor2Rate                                  Decimal?             @db.Decimal(14, 4)
   lockedAt                                       DateTime?
-  recommendedRate                                Decimal?            @db.Decimal(14, 4)
-  proposedRate                                   Decimal?            @db.Decimal(14, 4)
-  useNormWage                                    Boolean             @default(false)
-  status                                         CropfortLineStatus  @default(draft)
-  version                                        Int                 @default(1)
+  recommendedRate                                Decimal?             @db.Decimal(14, 4)
+  proposedRate                                   Decimal?             @db.Decimal(14, 4)
+  useNormWage                                    Boolean              @default(false)
+  sourceEvidence                                 String?
+  notes                                          String?
+  status                                         CropfortLineStatus   @default(draft)
+  version                                        Int                  @default(1)
   supersedesId                                   String?
   submittedAt                                    DateTime?
   approvedAt                                     DateTime?
@@ -607,18 +632,62 @@ model benchmark_surveys {
   approverUserId                                 String?
   returnedComment                                String?
   createdByUserId                                String
-  createdAt                                      DateTime            @default(now())
+  createdAt                                      DateTime             @default(now())
   updatedAt                                      DateTime
-  activity_master                                activity_master     @relation(fields: [activityId], references: [id])
-  users_benchmark_surveys_approverUserIdTousers  users?              @relation("benchmark_surveys_approverUserIdTousers", fields: [approverUserId], references: [id])
-  users_benchmark_surveys_createdByUserIdTousers users               @relation("benchmark_surveys_createdByUserIdTousers", fields: [createdByUserId], references: [id])
-  farm_estates                                   farm_estates        @relation(fields: [farmEstateId], references: [id], onDelete: Cascade)
-  programs                                       programs            @relation(fields: [programId], references: [id])
-  benchmark_surveys                              benchmark_surveys?  @relation("benchmark_surveysTobenchmark_surveys", fields: [supersedesId], references: [id])
-  other_benchmark_surveys                        benchmark_surveys[] @relation("benchmark_surveysTobenchmark_surveys")
+  activity                                       activities           @relation(fields: [activityId], references: [id])
+  users_benchmark_surveys_approverUserIdTousers  users?               @relation("benchmark_surveys_approverUserIdTousers", fields: [approverUserId], references: [id])
+  users_benchmark_surveys_createdByUserIdTousers users                @relation("benchmark_surveys_createdByUserIdTousers", fields: [createdByUserId], references: [id])
+  farm_estates                                   farm_estates         @relation(fields: [farmEstateId], references: [id], onDelete: Cascade)
+  programs                                       programs             @relation(fields: [programId], references: [id])
+  benchmark_surveys                              benchmark_surveys?   @relation("benchmark_surveysTobenchmark_surveys", fields: [supersedesId], references: [id])
+  other_benchmark_surveys                        benchmark_surveys[]  @relation("benchmark_surveysTobenchmark_surveys")
+  rate_card_proposals                            rate_card_proposals[]
 
   @@index([farmEstateId, activityId, status])
   @@index([programId, status])
+}
+
+/// SPX draft → submit → Silva (farm_owner) approve/reject. On approve, promotes to standing labor/material/service cards.
+model rate_card_proposals {
+  id                                                 String             @id
+  programId                                          String
+  farmEstateId                                       String
+  budgetYear                                         Int
+  blockId                                            String?
+  activityId                                         String
+  kind                                               String
+  sourceSurveyId                                     String?
+  recommendedRate                                    Decimal?           @db.Decimal(14, 4)
+  proposedRate                                       Decimal            @db.Decimal(14, 4)
+  norm                                               Decimal?           @db.Decimal(14, 6)
+  fallbackRate                                       Decimal?           @db.Decimal(14, 4)
+  sourceBasis                                        String             @default("")
+  availableFrom                                      DateTime?          @db.Date
+  availableTo                                        DateTime?          @db.Date
+  justificationNote                                  String?
+  sourceEvidence                                     String?
+  notes                                              String?
+  status                                             CropfortLineStatus @default(draft)
+  returnedComment                                    String?
+  submittedAt                                        DateTime?
+  approvedAt                                         DateTime?
+  approvedByUserId                                   String?
+  archivedAt                                         DateTime?
+  createdByUserId                                    String
+  createdAt                                          DateTime           @default(now())
+  updatedAt                                          DateTime
+  activity                                           activities         @relation(fields: [activityId], references: [id])
+  users_rate_card_proposals_approvedByUserIdTousers  users?             @relation("rate_card_proposals_approvedByUserIdTousers", fields: [approvedByUserId], references: [id])
+  users_rate_card_proposals_createdByUserIdTousers   users              @relation("rate_card_proposals_createdByUserIdTousers", fields: [createdByUserId], references: [id])
+  farm_estates                                       farm_estates       @relation(fields: [farmEstateId], references: [id], onDelete: Cascade)
+  programs                                           programs           @relation(fields: [programId], references: [id])
+  benchmark_surveys                                  benchmark_surveys? @relation(fields: [sourceSurveyId], references: [id])
+
+  @@index([programId, status])
+  @@index([farmEstateId, status])
+  @@index([programId, budgetYear])
+  @@index([sourceSurveyId])
+  @@index([archivedAt])
 }
 
 model block_field_tickets {
@@ -899,6 +968,9 @@ model farm_estates {
   farm_workflow_stages                         farm_workflow_stages[]
   fee_schedules                                fee_schedules[]
   labor_rate_cards                             labor_rate_cards[]
+  material_rate_cards                          material_rate_cards[]
+  service_rate_cards                           service_rate_cards[]
+  rate_card_proposals                          rate_card_proposals[]
   monthly_client_reports                       monthly_client_reports[]
   rate_card_lines                              rate_card_lines[]
   work_plan_submissions                        work_plan_submissions[]
@@ -1110,12 +1182,48 @@ model labor_rate_cards {
   createdByUserId        String
   createdAt              DateTime           @default(now())
   updatedAt              DateTime
-  activity_master        activity_master    @relation(fields: [activityId], references: [id])
+  activity               activities         @relation(fields: [activityId], references: [id])
   users                  users              @relation(fields: [createdByUserId], references: [id])
   farm_estates           farm_estates       @relation(fields: [farmEstateId], references: [id], onDelete: Cascade)
   programs               programs           @relation(fields: [programId], references: [id])
   labor_rate_cards       labor_rate_cards?  @relation("labor_rate_cardsTolabor_rate_cards", fields: [supersedesId], references: [id])
   other_labor_rate_cards labor_rate_cards[] @relation("labor_rate_cardsTolabor_rate_cards")
+
+  @@index([farmEstateId, activityId])
+  @@index([programId])
+}
+
+model material_rate_cards {
+  id             String        @id
+  programId      String
+  farmEstateId   String
+  activityId     String
+  unit           String
+  rate           Decimal       @db.Decimal(14, 4)
+  currency       String        @default("ETB")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  activity       activities    @relation(fields: [activityId], references: [id])
+  farm_estates   farm_estates  @relation(fields: [farmEstateId], references: [id], onDelete: Cascade)
+  programs       programs      @relation(fields: [programId], references: [id])
+
+  @@index([farmEstateId, activityId])
+  @@index([programId])
+}
+
+model service_rate_cards {
+  id             String        @id
+  programId      String
+  farmEstateId   String
+  activityId     String
+  unit           String
+  rate           Decimal       @db.Decimal(14, 4)
+  currency       String        @default("ETB")
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  activity       activities    @relation(fields: [activityId], references: [id])
+  farm_estates   farm_estates  @relation(fields: [farmEstateId], references: [id], onDelete: Cascade)
+  programs       programs      @relation(fields: [programId], references: [id])
 
   @@index([farmEstateId, activityId])
   @@index([programId])

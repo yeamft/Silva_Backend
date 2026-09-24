@@ -36,6 +36,14 @@ const tenantBranding = z.object({
   displayName: z.string().min(1).optional(),
   branding: z.record(z.any()).optional(),
 });
+const contactInquiry = z.object({
+  name: z.string().trim().min(1).max(120),
+  email: z.string().trim().email().max(200),
+  organization: z.string().trim().max(160).optional().default(""),
+  message: z.string().trim().min(10).max(4000),
+  /** Honeypot — bots fill this; service ignores the inquiry */
+  website: z.string().max(200).optional().default(""),
+});
 
 const rateCardCategory = z.object({
   label: z.string().min(1),
@@ -162,6 +170,47 @@ const acceptInvite = z.object({
   password: z.string().min(8),
 });
 
+const catalogResource = z.object({
+  name: z.string().min(1),
+  description: z.string().optional().nullable(),
+  defaultUnit: z.string().min(1),
+  isActive: z.boolean().optional(),
+});
+const catalogResourceUpdate = catalogResource.partial();
+
+const materialResource = catalogResource.extend({
+  stockQuantity: z.number().finite().nonnegative().optional(),
+});
+const materialResourceUpdate = materialResource.partial();
+
+const modularRateCard = z.object({
+  name: z.string().min(1),
+  effectiveDate: z.string().optional(),
+  endDate: z.union([z.string(), z.null()]).optional(),
+  currency: z.string().min(1).optional(),
+});
+const modularRateCardUpdate = modularRateCard.partial();
+
+const rateCardLineItem = z.object({
+  category: z.enum(["labor", "equipment", "material"]),
+  laborActivityId: z.string().min(1).optional().nullable(),
+  equipmentResourceId: z.string().min(1).optional().nullable(),
+  materialId: z.string().min(1).optional().nullable(),
+  unit: z.string().optional(),
+  rate: z.number().finite().nonnegative(),
+  overtimeMultiplier: z.union([z.number().finite().positive(), z.null()]).optional(),
+  minimumQty: z.union([z.number().finite().nonnegative(), z.null()]).optional(),
+  notes: z.string().optional().nullable(),
+});
+const rateCardLineItemUpdate = rateCardLineItem.partial().extend({
+  category: z.enum(["labor", "equipment", "material"]).optional(),
+  rate: z.number().finite().nonnegative().optional(),
+});
+
+const rateCardReject = z.object({
+  comment: z.string().min(1),
+});
+
 module.exports = {
   login,
   refresh,
@@ -173,6 +222,7 @@ module.exports = {
   signup,
   switchProgram,
   tenantBranding,
+  contactInquiry,
   rateCardCategory,
   rateCardLine,
   rateCardReturn,
@@ -187,4 +237,13 @@ module.exports = {
   adminProgram,
   adminProgramUpdate,
   acceptInvite,
+  catalogResource,
+  catalogResourceUpdate,
+  materialResource,
+  materialResourceUpdate,
+  modularRateCard,
+  modularRateCardUpdate,
+  rateCardLineItem,
+  rateCardLineItemUpdate,
+  rateCardReject,
 };

@@ -260,9 +260,12 @@ async function main() {
     });
   }
 
+  const { seedActivities } = require("./seedActivities");
+  await seedActivities(prisma);
+
   console.log("Auth seed complete.");
   console.log("Programs: Silva Kaffa Coffee Program, Chaka Buna Estate");
-  console.log("Rate card: categories + sample lines for Shecha program");
+  console.log("Activity taxonomy seeded from Cropfort Coffee Field OS Template");
   console.log("Users (password Password123!):");
   console.log("  owner@silva.example");
   console.log("  admin@spx.example");

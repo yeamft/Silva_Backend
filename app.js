@@ -8,7 +8,6 @@ const env = require("./config/env");
 const { corsOptions, allowedOrigins } = require("./config/cors");
 
 const authRoutes = require("./routes/auth.routes");
-const rateCardRoutes = require("./routes/rateCard.routes");
 const usersRoutes = require("./routes/users.routes");
 const orgMapRoutes = require("./routes/orgMap.routes");
 
@@ -45,11 +44,32 @@ app.get("/api/v1/health", async (_req, res) => {
 });
 
 app.use("/api/v1/auth", authRoutes);
-app.use("/api/v1/rate-card", rateCardRoutes);
+app.use("/api/v1/contact", require("./routes/contact.routes"));
+app.use("/api/v1/activities", require("./routes/activities.routes"));
+app.use("/api/v1/farms", require("./routes/farms.routes"));
+app.use("/api/v1/benchmark-surveys", require("./routes/benchmarkSurveys.routes"));
+app.use("/api/v1/rate-card-proposals", require("./routes/rateCardProposals.routes"));
 app.use("/api/v1/users", usersRoutes);
 app.use("/api/v1/org-map", orgMapRoutes);
 app.use("/api/v1/programs", require("./routes/programs.routes"));
 app.use("/api/v1/notifications", require("./routes/notifications.routes"));
+
+// Legacy modular period rate cards + catalogs retired (Cropfort Excel model).
+function goneModular(req, res) {
+  res.status(410).json({
+    error: {
+      code: "GONE",
+      message:
+        "Period rate cards and catalogs were removed. Use /api/v1/activities, /api/v1/farms/:farmId/*-rate-cards, /api/v1/benchmark-surveys, and /api/v1/rate-card-proposals.",
+      details: [],
+    },
+  });
+}
+app.use("/api/v1/labor-activities", goneModular);
+app.use("/api/v1/equipment-resources", goneModular);
+app.use("/api/v1/materials", goneModular);
+app.use("/api/v1/rate-cards", goneModular);
+app.use("/api/v1/rate-card", goneModular);
 
 
 

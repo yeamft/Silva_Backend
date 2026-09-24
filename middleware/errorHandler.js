@@ -21,6 +21,17 @@ module.exports = (err, req, res, next) => {
     });
   }
 
+  if (err && err.name === "MulterError") {
+    return res.status(400).json({
+      error: {
+        code: "INVALID_FILE",
+        message: err.code === "LIMIT_FILE_SIZE" ? "File exceeds the 5MB limit." : err.message,
+        details: [],
+      },
+      requestId: req.requestId,
+    });
+  }
+
   if (err && err.code === "P2002") {
     return res.status(409).json({
       error: { code: "CONFLICT", message: "Duplicate or unique constraint.", details: [] },
