@@ -21,8 +21,18 @@ async function ensureActiveProgram(user) {
 
 async function hydrateUserContext(user) {
   const activeProgramId = await ensureActiveProgram(user);
+  const programId = activeProgramId ?? user.activeProgramId ?? null;
+  let cropfortRoles = [];
+  if (programId) {
+    const rows = await prisma.cropfort_user_roles.findMany({
+      where: { userId: user.id, programId },
+      select: { role: true },
+    });
+    cropfortRoles = [...new Set(rows.map((r) => r.role))];
+  }
   return {
-    activeProgramId: activeProgramId ?? user.activeProgramId ?? null,
+    activeProgramId: programId,
+    cropfortRoles,
     changed: Boolean(activeProgramId && activeProgramId !== user.activeProgramId),
   };
 }

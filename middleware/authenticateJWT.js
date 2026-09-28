@@ -65,6 +65,7 @@ module.exports = async (req, res, next) => {
       name: user.name,
       email: user.email,
       role: user.role,
+      cropfortRoles: ctx.cropfortRoles || [],
       organizationId: user.organizationId,
       organizationType: user.organization.type,
       organization: user.organization,

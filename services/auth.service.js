@@ -171,6 +171,18 @@ exports.me = async (user) => {
           name: full.activeProgram.name,
           slug: full.activeProgram.slug,
           branding: full.activeProgram.brandingJson || null,
+          cropfortAfeBandAMaxEtb:
+            full.activeProgram.cropfortAfeBandAMaxEtb != null
+              ? Number(full.activeProgram.cropfortAfeBandAMaxEtb)
+              : 500000,
+          cropfortAfeBandBMaxEtb:
+            full.activeProgram.cropfortAfeBandBMaxEtb != null
+              ? Number(full.activeProgram.cropfortAfeBandBMaxEtb)
+              : 2000000,
+          cropfortAfeBandCMaxEtb:
+            full.activeProgram.cropfortAfeBandCMaxEtb != null
+              ? Number(full.activeProgram.cropfortAfeBandCMaxEtb)
+              : 5000000,
         }
       : null,
     programs,

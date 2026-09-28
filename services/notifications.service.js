@@ -69,10 +69,18 @@ async function listForUser(user) {
 
 async function acknowledge(user, id) {
   assertRead(user);
+  const programId = user.activeProgramId || null;
   const existing = await prisma.notifications.findFirst({
     where: {
       id,
-      OR: [{ recipientUserId: user.id }, { recipientUserId: null, recipientRole: user.role }],
+      OR: [
+        { recipientUserId: user.id },
+        {
+          recipientUserId: null,
+          recipientRole: user.role,
+          ...(programId ? { programId } : { programId: null }),
+        },
+      ],
     },
   });
   if (!existing) throw new AppError(404, "NOT_FOUND", "Notification not found");
@@ -85,12 +93,17 @@ async function acknowledge(user, id) {
 
 async function acknowledgeAll(user) {
   assertRead(user);
+  const programId = user.activeProgramId || null;
   await prisma.notifications.updateMany({
     where: {
       acknowledged: false,
       OR: [
         { recipientUserId: user.id },
-        { recipientUserId: null, recipientRole: user.role, programId: user.activeProgramId || undefined },
+        {
+          recipientUserId: null,
+          recipientRole: user.role,
+          ...(programId ? { programId } : { programId: null }),
+        },
       ],
     },
     data: { acknowledged: true },

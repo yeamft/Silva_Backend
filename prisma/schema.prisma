@@ -72,6 +72,14 @@ model programs {
   cropfort_activity_plans       cropfort_activity_plans[]
   cropfort_afes                 cropfort_afes[]
   cropfort_elections            cropfort_elections[]
+  cropfort_programme_plans      cropfort_programme_plans[]
+  cropfort_weekly_plans         cropfort_weekly_plans[]
+  cropfort_monthly_work_orders  cropfort_monthly_work_orders[]
+  cropfort_daily_field_records  cropfort_daily_field_records[]
+  cropfort_direct_instructions  cropfort_direct_instructions[]
+  cropfort_projects             cropfort_projects[]
+  cropfort_interventions        cropfort_interventions[]
+  cropfort_plan_scenarios       cropfort_plan_scenarios[]
   cropfort_user_roles           cropfort_user_roles[]
   farm_blocks                   farm_blocks[]
   farm_estates                  farm_estates[]
@@ -149,6 +157,16 @@ model users {
   block_field_tickets                                                  block_field_tickets[]
   cropfort_afes                                                        cropfort_afes[]
   cropfort_elections                                                   cropfort_elections[]
+  cropfort_programme_plans_created                                     cropfort_programme_plans[]     @relation("programme_plans_createdBy")
+  cropfort_programme_plans_submitted                                   cropfort_programme_plans[]     @relation("programme_plans_submittedBy")
+  cropfort_programme_plans_reviewed                                    cropfort_programme_plans[]     @relation("programme_plans_reviewedBy")
+  cropfort_weekly_plans_created                                        cropfort_weekly_plans[]        @relation("weekly_plans_createdBy")
+  cropfort_monthly_work_orders_created                                 cropfort_monthly_work_orders[] @relation("monthly_wo_createdBy")
+  cropfort_daily_field_records_created                                 cropfort_daily_field_records[] @relation("dfr_createdBy")
+  cropfort_direct_instructions_created                                 cropfort_direct_instructions[] @relation("di_createdBy")
+  cropfort_projects_created                                            cropfort_projects[]             @relation("cropfort_projects_createdBy")
+  cropfort_interventions_created                                       cropfort_interventions[]        @relation("cropfort_interventions_createdBy")
+  cropfort_plan_scenarios_created                                      cropfort_plan_scenarios[]       @relation("cropfort_plan_scenarios_createdBy")
   cropfort_user_roles                                                  cropfort_user_roles[]
   farm_blocks                                                          farm_blocks[]
   farm_estates_farm_estates_approverUserIdTousers                      farm_estates[]                 @relation("farm_estates_approverUserIdTousers")
@@ -176,7 +194,8 @@ model users {
   rate_card_proposals_rate_card_proposals_createdByUserIdTousers       rate_card_proposals[]          @relation("rate_card_proposals_createdByUserIdTousers")
   refreshSessions                                                      refresh_sessions[]
   registration_requests                                                registration_requests[]
-  reports                                                              reports[]
+  reports_reports_createdByUserIdTousers                               reports[]                       @relation("reports_createdBy")
+  reports_reports_releasedByUserIdTousers                              reports[]                       @relation("reports_releasedBy")
   season_calendars                                                     season_calendars[]
   supervisor_progress                                                  supervisor_progress[]
   activeProgram                                                        programs?                      @relation("ActiveProgram", fields: [activeProgramId], references: [id])
@@ -357,11 +376,12 @@ model activities {
   unitOfMeasure       String
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
-  benchmark_surveys   benchmark_surveys[]
-  labor_rate_cards    labor_rate_cards[]
-  material_rate_cards material_rate_cards[]
-  service_rate_cards  service_rate_cards[]
-  rate_card_proposals rate_card_proposals[]
+  benchmark_surveys              benchmark_surveys[]
+  labor_rate_cards               labor_rate_cards[]
+  material_rate_cards            material_rate_cards[]
+  service_rate_cards             service_rate_cards[]
+  rate_card_proposals            rate_card_proposals[]
+  cropfort_programme_plan_lines  cropfort_programme_plan_lines[]
 
   @@index([tier])
   @@index([category])
@@ -792,6 +812,84 @@ model cropfort_activity_plans {
   @@index([farmEstateId, planYear, blockId])
 }
 
+/// Annual / six-month programme plan (Core Ops wizard). Authoritative planning header.
+/// Multiple plans may share the same workspace + farm area + budget year.
+model cropfort_programme_plans {
+  id                   String                              @id
+  programId            String
+  farmEstateId         String
+  planYear             Int
+  /// User-facing programme plan name (not the workspace or farm area).
+  name                 String                              @default("")
+  code                 String                              @default("")
+  description          String                              @default("")
+  /// Planning cycle label e.g. "2027 Programme" (global context — not the plan itself).
+  planningCycleLabel   String                              @default("")
+  budgetYearLabel      String                              @default("")
+  status               ProgrammePlanStatus                 @default(draft)
+  notes                String?
+  totalHa              Decimal?                            @db.Decimal(10, 2)
+  vendorLabel          String                              @default("")
+  programBandSetId     String?
+  applicableBlockIds   String[]                            @default([])
+  plannedCostEtb       Decimal                             @default(0) @db.Decimal(14, 2)
+  resolvedBand         AfeBand?
+  approvalRequirement  String?
+  createdByUserId      String
+  submittedByUserId    String?
+  reviewedByUserId     String?
+  submittedAt          DateTime?
+  reviewedAt           DateTime?
+  returnedComment      String?
+  archivedAt           DateTime?
+  createdAt            DateTime                            @default(now())
+  updatedAt            DateTime                            @updatedAt
+  lines                cropfort_programme_plan_lines[]
+  users_created        users                               @relation("programme_plans_createdBy", fields: [createdByUserId], references: [id])
+  users_submitted      users?                              @relation("programme_plans_submittedBy", fields: [submittedByUserId], references: [id])
+  users_reviewed       users?                              @relation("programme_plans_reviewedBy", fields: [reviewedByUserId], references: [id])
+  farm_estates         farm_estates                        @relation(fields: [farmEstateId], references: [id], onDelete: Cascade)
+  programs             programs                            @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  @@index([programId, status])
+  @@index([farmEstateId, planYear])
+  @@index([programId, farmEstateId, status])
+  @@index([programId, planYear])
+  @@index([programId, name])
+}
+
+model cropfort_programme_plan_lines {
+  id                String                     @id
+  planId            String
+  activityId        String
+  activityCode      String
+  activityName      String
+  category          String                     @default("")
+  uom               String                     @default("")
+  scope             String                     @default("block")
+  included          Boolean                    @default(false)
+  plannedQty        Decimal                    @default(0) @db.Decimal(14, 4)
+  unitRateEtb       Decimal?                   @db.Decimal(14, 4)
+  rateCardId        String?
+  rateSource        String?
+  rateStatus        ProgrammeRateStatus        @default(MISSING)
+  plannedCostEtb    Decimal                    @default(0) @db.Decimal(14, 2)
+  intensities       Json                       @default("{}")
+  blockAllocations  Json                       @default("[]")
+  manualsRef        String                     @default("")
+  serviceType       String                     @default("core_ops")
+  notes             String?
+  sortOrder         Int                        @default(0)
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+  plan              cropfort_programme_plans   @relation(fields: [planId], references: [id], onDelete: Cascade)
+  activity          activities                 @relation(fields: [activityId], references: [id])
+
+  @@unique([planId, activityId])
+  @@index([planId, included])
+  @@index([activityId])
+}
+
 model cropfort_afes {
   id                      String                   @id
   programId               String
@@ -815,9 +913,291 @@ model cropfort_afes {
   programs                programs                 @relation(fields: [programId], references: [id])
   cropfort_afes           cropfort_afes?           @relation("cropfort_afesTocropfort_afes", fields: [supersedesId], references: [id])
   other_cropfort_afes     cropfort_afes[]          @relation("cropfort_afesTocropfort_afes")
+  work_orders             work_orders[]
 
   @@index([programId, band])
   @@index([programId, status])
+}
+
+model cropfort_weekly_plans {
+  id                    String                    @id
+  programId             String
+  code                  String
+  weekLabel             String
+  monthlyWoId           String?
+  monthlyWoCode         String?
+  status                CropfortWeeklyPlanStatus  @default(draft)
+  loop                  String                    @default("none")
+  note                  String                    @default("")
+  bridgedWorkOrderIds   Json                      @default("[]")
+  directInstructionIds  Json                      @default("[]")
+  returnedComment       String?
+  submittedAt           DateTime?
+  approvedAt            DateTime?
+  activatedAt           DateTime?
+  createdByUserId       String
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime
+  lines                 cropfort_weekly_plan_lines[]
+  programs              programs                  @relation(fields: [programId], references: [id])
+  users                 users                     @relation("weekly_plans_createdBy", fields: [createdByUserId], references: [id])
+
+  @@unique([programId, code])
+  @@index([programId, status])
+  @@index([programId, weekLabel])
+}
+
+model cropfort_weekly_plan_lines {
+  id             String                @id
+  planId         String
+  monthlyLineId  String?
+  activityId     String?
+  activityCode   String                @default("")
+  activityName   String
+  blockId        String?
+  blockCode      String                @default("")
+  qty            Decimal               @db.Decimal(14, 2)
+  unit           String                @default("")
+  crew           String                @default("")
+  materials      String                @default("")
+  manualsRef     String                @default("")
+  etb            Decimal               @db.Decimal(14, 2)
+  sortOrder      Int                   @default(0)
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime
+  plan           cropfort_weekly_plans @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@index([planId])
+}
+
+model cropfort_monthly_work_orders {
+  id                      String                         @id
+  programId               String
+  code                    String
+  farmId                  String?
+  farmName                String                         @default("")
+  ethiopianMonth          String
+  yearGc                  Int
+  status                  CropfortMonthlyWoStatus        @default(draft)
+  sourcePlanId            String?
+  outOfPlanReason         String                         @default("")
+  loop                    String                         @default("none")
+  totalEtb                Decimal                        @db.Decimal(14, 2) @default(0)
+  lastMonthInsights       String                         @default("")
+  structuredInsightsJson  Json?
+  recommendedAdjustmentsJson Json                         @default("[]")
+  note                    String                         @default("")
+  returnedComment         String?
+  submittedAt             DateTime?
+  approvedAt              DateTime?
+  activatedAt             DateTime?
+  createdByUserId         String
+  createdAt               DateTime                       @default(now())
+  updatedAt               DateTime
+  lines                   cropfort_monthly_wo_lines[]
+  programs                programs                       @relation(fields: [programId], references: [id])
+  users                   users                          @relation("monthly_wo_createdBy", fields: [createdByUserId], references: [id])
+
+  @@unique([programId, code])
+  @@index([programId, status])
+  @@index([programId, ethiopianMonth, yearGc])
+}
+
+model cropfort_monthly_wo_lines {
+  id           String                      @id
+  monthlyWoId  String
+  activityId   String?
+  activityCode String                      @default("")
+  activityName String
+  blockId      String?
+  blockCode    String                      @default("")
+  plannedQty   Decimal                     @db.Decimal(14, 2)
+  unit         String                      @default("")
+  etb          Decimal                     @db.Decimal(14, 2)
+  manualsRef   String                      @default("")
+  inPlan       Boolean                     @default(true)
+  sortOrder    Int                         @default(0)
+  createdAt    DateTime                    @default(now())
+  updatedAt    DateTime
+  monthlyWo    cropfort_monthly_work_orders @relation(fields: [monthlyWoId], references: [id], onDelete: Cascade)
+
+  @@index([monthlyWoId])
+}
+
+model cropfort_daily_field_records {
+  id                String                       @id
+  programId         String
+  code              String
+  weeklyPlanId      String?
+  weeklyPlanLineId  String?
+  monthlyWoId       String?
+  monthlyWoCode     String                       @default("")
+  monthlyLineId     String?
+  workOrderId       String?
+  date              DateTime                     @db.Date
+  blockId           String?
+  blockCode         String                       @default("")
+  activityId        String?
+  activityCode      String                       @default("")
+  activityName      String
+  plannedQty        Decimal                      @db.Decimal(14, 2)
+  actualQty         Decimal                      @db.Decimal(14, 2)
+  unit              String                       @default("")
+  laborHours        Decimal                      @db.Decimal(14, 2) @default(0)
+  materialsUsedJson Json                         @default("[]")
+  notes             String                       @default("")
+  status            CropfortDfrStatus            @default(draft)
+  variancePct       Decimal                      @db.Decimal(8, 2) @default(0)
+  linkedTicketId    String?
+  pctDone           Decimal?                     @db.Decimal(8, 2)
+  qualityScore      Decimal?                     @db.Decimal(8, 2)
+  version           Int                          @default(1)
+  supersedesId      String?
+  failedCriteriaJson Json                        @default("[]")
+  entrySource       String                       @default("bagro_platform")
+  missCause         String?
+  loop              String                       @default("none")
+  validationNotes   String                       @default("")
+  createdByUserId   String
+  createdAt         DateTime                     @default(now())
+  updatedAt         DateTime
+  programs          programs                     @relation(fields: [programId], references: [id])
+  users             users                        @relation("dfr_createdBy", fields: [createdByUserId], references: [id])
+  supersedes        cropfort_daily_field_records? @relation("dfr_versions", fields: [supersedesId], references: [id])
+  versions          cropfort_daily_field_records[] @relation("dfr_versions")
+
+  @@unique([programId, code])
+  @@index([programId, status])
+  @@index([weeklyPlanId])
+  @@index([monthlyWoId])
+}
+
+model cropfort_direct_instructions {
+  id                     String                       @id
+  programId              String
+  code                   String
+  title                  String
+  description            String                       @default("")
+  monthlyWoId            String?
+  monthlyWoCode          String?
+  weeklyPlanId           String?
+  weeklyPlanLineId       String?
+  workOrderId            String?
+  blockId                String?
+  blockCode              String                       @default("")
+  amountEtb              Decimal                      @db.Decimal(14, 2)
+  overThreshold          Boolean                      @default(false)
+  oralPendingConfirm     Boolean                      @default(false)
+  status                 CropfortDirectInstructionStatus @default(issued)
+  issuedAt               DateTime                     @default(now())
+  confirmedAt            DateTime?
+  rolledIntoWeeklyPlanId String?
+  note                   String                       @default("")
+  createdByUserId        String
+  createdAt              DateTime                     @default(now())
+  updatedAt              DateTime
+  programs               programs                     @relation(fields: [programId], references: [id])
+  users                  users                        @relation("di_createdBy", fields: [createdByUserId], references: [id])
+
+  @@unique([programId, code])
+  @@index([programId, status])
+  @@index([monthlyWoId])
+}
+
+model cropfort_projects {
+  id              String                @id
+  programId       String
+  code            String
+  title           String
+  blockId         String?
+  blockCode       String                @default("")
+  vendor          String                @default("")
+  budgetEtb       Decimal               @db.Decimal(14, 2)
+  band            AfeBand
+  status          CropfortProjectStatus @default(draft)
+  notes           String                @default("")
+  cropfortAfeId   String?
+  returnedComment String?
+  submittedAt     DateTime?
+  approvedAt      DateTime?
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdByUserId String
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime
+  milestones      cropfort_project_milestones[]
+  programs        programs              @relation(fields: [programId], references: [id])
+  users           users                 @relation("cropfort_projects_createdBy", fields: [createdByUserId], references: [id])
+
+  @@unique([programId, code])
+  @@index([programId, status])
+}
+
+model cropfort_project_milestones {
+  id        String            @id
+  projectId String
+  title     String
+  done      Boolean           @default(false)
+  sortOrder Int               @default(0)
+  cropfort_projects cropfort_projects @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model cropfort_interventions {
+  id              String                     @id
+  programId       String
+  code            String
+  title           String
+  blockId         String?
+  blockCode       String                     @default("")
+  vendor          String                     @default("")
+  costEtb         Decimal                    @db.Decimal(14, 2)
+  band            AfeBand
+  status          CropfortInterventionStatus @default(draft)
+  cropfortAfeId   String?
+  returnedComment String?
+  submittedAt     DateTime?
+  approvedAt      DateTime?
+  completedAt     DateTime?
+  createdByUserId String
+  createdAt       DateTime                   @default(now())
+  updatedAt       DateTime
+  steps           cropfort_intervention_steps[]
+  programs        programs                   @relation(fields: [programId], references: [id])
+  users           users                      @relation("cropfort_interventions_createdBy", fields: [createdByUserId], references: [id])
+
+  @@unique([programId, code])
+  @@index([programId, status])
+}
+
+model cropfort_intervention_steps {
+  id             String                 @id
+  interventionId String
+  title          String
+  done           Boolean                @default(false)
+  sortOrder      Int                    @default(0)
+  cropfort_interventions cropfort_interventions @relation(fields: [interventionId], references: [id], onDelete: Cascade)
+
+  @@index([interventionId])
+}
+
+model cropfort_plan_scenarios {
+  id              String   @id
+  programId       String
+  name            String
+  note            String   @default("")
+  snapshotJson    Json
+  includedCount   Int      @default(0)
+  budgetEtb       Decimal  @default(0) @db.Decimal(14, 2)
+  scheduledCount  Int      @default(0)
+  createdByUserId String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime
+  programs        programs @relation(fields: [programId], references: [id])
+  users           users    @relation("cropfort_plan_scenarios_createdBy", fields: [createdByUserId], references: [id])
+
+  @@index([programId])
 }
 
 model cropfort_elections {
@@ -958,6 +1338,7 @@ model farm_estates {
   benchmark_surveys                            benchmark_surveys[]
   cropfort_activity_plans                      cropfort_activity_plans[]
   cropfort_elections                           cropfort_elections[]
+  cropfort_programme_plans                     cropfort_programme_plans[]
   farm_blocks                                  farm_blocks[]
   farm_estate_vendors                          farm_estate_vendors[]
   farm_estate_asset_owners                     farm_estate_asset_owners[]
@@ -973,6 +1354,7 @@ model farm_estates {
   rate_card_proposals                          rate_card_proposals[]
   monthly_client_reports                       monthly_client_reports[]
   rate_card_lines                              rate_card_lines[]
+  work_orders                                  work_orders[]
   work_plan_submissions                        work_plan_submissions[]
 
   @@unique([programId, name])
@@ -1069,6 +1451,8 @@ model field_tickets {
 
   @@index([activityCatalogId])
   @@index([programId, status])
+  @@index([workOrderId])
+  @@index([submittedByUserId])
 }
 
 model gl_journal_export_lines {
@@ -1454,21 +1838,46 @@ model related_party_disclosures {
 }
 
 model reports {
-  id               String       @id
-  programId        String
-  type             ReportType
-  period           String
-  status           ReportStatus @default(draft)
-  generatedAt      DateTime     @default(now())
-  narrative        String?
-  releasedAt       DateTime?
-  releasedByUserId String?
-  visibleToSilva   Boolean      @default(false)
-  sections         Json?
-  programs         programs     @relation(fields: [programId], references: [id])
-  users            users?       @relation(fields: [releasedByUserId], references: [id])
+  id                   String        @id
+  programId            String
+  code                 String
+  title                String        @default("")
+  cadence              ReportCadence @default(monthly)
+  periodLabel          String
+  status               ReportStatus  @default(draft)
+  farmName             String        @default("")
+  programName          String        @default("")
+  authorName           String        @default("")
+  summary              String        @default("")
+  highlights           String        @default("")
+  risks                String        @default("")
+  recommendations      String        @default("")
+  outlook              String        @default("")
+  planEtb              Decimal       @default(0) @db.Decimal(14, 2)
+  actualEtb            Decimal       @default(0) @db.Decimal(14, 2)
+  variancePct          Decimal       @default(0) @db.Decimal(6, 2)
+  metricsJson          Json?
+  activityLinesJson    Json          @default("[]")
+  blockLinesJson       Json          @default("[]")
+  attentionItemsJson   Json          @default("[]")
+  missAttributionsJson Json          @default("[]")
+  eventsJson           Json          @default("[]")
+  returnedComment      String?
+  submittedAt          DateTime?
+  releasedAt           DateTime?
+  releasedTo           String?
+  releasedByUserId     String?
+  visibleToSilva       Boolean       @default(false)
+  createdByUserId      String
+  createdAt            DateTime      @default(now())
+  updatedAt            DateTime
+  programs             programs      @relation(fields: [programId], references: [id])
+  releasedByUser       users?        @relation("reports_releasedBy", fields: [releasedByUserId], references: [id])
+  createdByUser        users         @relation("reports_createdBy", fields: [createdByUserId], references: [id])
 
-  @@index([programId, type, status])
+  @@unique([programId, code])
+  @@index([programId, status])
+  @@index([programId, cadence])
 }
 
 model restricted_export_credentials {
@@ -1721,12 +2130,18 @@ model work_order_tasks {
 model work_orders {
   id                           String                         @id
   programId                    String
-  afeId                        String
+  afeId                        String?
+  cropfortAfeId                String?
+  code                         String?
+  title                        String?
   category                     String
   activity                     String
-  tier                         WorkOrderTier
+  tier                         WorkOrderTier                  @default(retainer)
   weekStart                    Int
   weekEnd                      Int
+  plannedCostEtb               Decimal?                       @db.Decimal(14, 2)
+  farmEstateId                 String?
+  instructions                 String?
   spxOversightHoursL1          Int                            @default(0)
   spxOversightHoursL2          Int                            @default(0)
   spxOversightHoursL3          Int                            @default(0)
@@ -1744,12 +2159,19 @@ model work_orders {
   work_order_block_assignments work_order_block_assignments[]
   work_order_tasks             work_order_tasks[]
   activity_catalog             activity_catalog?              @relation(fields: [activityCatalogId], references: [id])
-  afes                         afes                           @relation(fields: [afeId], references: [id])
+  afes                         afes?                          @relation(fields: [afeId], references: [id])
+  cropfort_afes                cropfort_afes?                 @relation(fields: [cropfortAfeId], references: [id])
+  farm_estates                 farm_estates?                  @relation(fields: [farmEstateId], references: [id])
   vendors                      vendors?                       @relation(fields: [assignedVendorId], references: [id])
   programs                     programs                       @relation(fields: [programId], references: [id])
 
   @@index([activityCatalogId])
   @@index([programId, status])
+  @@index([afeId])
+  @@index([cropfortAfeId])
+  @@index([assignedVendorId])
+  @@index([farmEstateId])
+  @@unique([programId, code])
 }
 
 model work_plan_submissions {
@@ -1924,6 +2346,75 @@ enum CropfortLineStatus {
   returned
 }
 
+enum CropfortWeeklyPlanStatus {
+  draft
+  submitted
+  approved
+  returned
+  active
+}
+
+enum CropfortMonthlyWoStatus {
+  draft
+  submitted
+  approved
+  returned
+  active
+}
+
+enum CropfortDfrStatus {
+  draft
+  submitted
+  site_checked
+  validated
+  returned
+}
+
+enum CropfortDirectInstructionStatus {
+  draft
+  issued
+  confirmed
+  rolled_into_weekly
+  escalated
+}
+
+enum CropfortProjectStatus {
+  draft
+  submitted
+  approved
+  in_progress
+  complete
+  returned
+}
+
+enum CropfortInterventionStatus {
+  draft
+  active
+  submitted
+  approved
+  complete
+  returned
+}
+
+enum ProgrammePlanStatus {
+  draft
+  ready_for_review
+  submitted
+  returned
+  approved
+  active
+  closed
+  archived
+}
+
+enum ProgrammeRateStatus {
+  VALID
+  MISSING
+  EXPIRED
+  UNAPPROVED
+  OVERRIDDEN
+}
+
 enum CropfortRole {
   field_supervisor
   field_manager
@@ -2058,14 +2549,14 @@ enum RegistrationRequestStatus {
 
 enum ReportStatus {
   draft
-  in_review
+  submitted
   released
+  returned
 }
 
-enum ReportType {
-  weekly
+enum ReportCadence {
   monthly
-  quarterly
+  six_month
   annual
 }
 

@@ -29,6 +29,9 @@ function programJson(p, membership) {
     createdByOrgId: p.createdByOrgId,
     roleInProgram: membership?.roleInProgram || null,
     createdAt: p.createdAt.toISOString(),
+    cropfortAfeBandAMaxEtb: p.cropfortAfeBandAMaxEtb != null ? Number(p.cropfortAfeBandAMaxEtb) : 500000,
+    cropfortAfeBandBMaxEtb: p.cropfortAfeBandBMaxEtb != null ? Number(p.cropfortAfeBandBMaxEtb) : 2000000,
+    cropfortAfeBandCMaxEtb: p.cropfortAfeBandCMaxEtb != null ? Number(p.cropfortAfeBandCMaxEtb) : 5000000,
   };
 }
 
@@ -43,6 +46,10 @@ function adminProgramJson(p) {
     updatedAt: p.updatedAt ? p.updatedAt.toISOString() : null,
     memberCount: p._count?.memberships ?? 0,
     farmAreaCount: p._count?.farm_estates ?? 0,
+    cropfortAfeBandAMaxEtb: p.cropfortAfeBandAMaxEtb != null ? Number(p.cropfortAfeBandAMaxEtb) : 500000,
+    cropfortAfeBandBMaxEtb: p.cropfortAfeBandBMaxEtb != null ? Number(p.cropfortAfeBandBMaxEtb) : 2000000,
+    cropfortAfeBandCMaxEtb: p.cropfortAfeBandCMaxEtb != null ? Number(p.cropfortAfeBandCMaxEtb) : 5000000,
+    cropfortCurrency: p.cropfortCurrency || "ETB",
   };
 }
 
@@ -188,9 +195,23 @@ exports.updateProgram = async (user, id, dto) => {
   const status =
     dto.status === undefined ? existing.status : dto.status === "archived" ? "archived" : "active";
 
+  const data = { name, slug, status };
+  if (dto.cropfortAfeBandAMaxEtb != null) {
+    data.cropfortAfeBandAMaxEtb = dto.cropfortAfeBandAMaxEtb;
+  }
+  if (dto.cropfortAfeBandBMaxEtb != null) {
+    data.cropfortAfeBandBMaxEtb = dto.cropfortAfeBandBMaxEtb;
+  }
+  if (dto.cropfortAfeBandCMaxEtb != null) {
+    data.cropfortAfeBandCMaxEtb = dto.cropfortAfeBandCMaxEtb;
+  }
+  if (dto.cropfortCurrency != null) {
+    data.cropfortCurrency = String(dto.cropfortCurrency).trim() || existing.cropfortCurrency;
+  }
+
   const updated = await prisma.programs.update({
     where: { id },
-    data: { name, slug, status },
+    data,
     include: { _count: { select: { memberships: true, farm_estates: true } } },
   });
   return adminProgramJson(updated);

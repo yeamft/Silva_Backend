@@ -140,7 +140,36 @@ const vendorInclude = {
 
 async function listOrganizations(user) {
   assertView(user);
-  const rows = await prisma.organizations.findMany({ orderBy: { name: "asc" } });
+  const programId = requireProgramId(user);
+
+  const [memberships, estates, vendorLinks] = await Promise.all([
+    prisma.program_memberships.findMany({
+      where: { programId },
+      select: { organizationId: true },
+    }),
+    prisma.farm_estates.findMany({
+      where: { programId },
+      select: { ownerOrganizationId: true },
+    }),
+    prisma.farm_estate_vendors.findMany({
+      where: { farm_estates: { programId } },
+      include: { vendors: { select: { organizationId: true } } },
+    }),
+  ]);
+
+  const ids = new Set();
+  for (const m of memberships) ids.add(m.organizationId);
+  for (const e of estates) if (e.ownerOrganizationId) ids.add(e.ownerOrganizationId);
+  for (const l of vendorLinks) {
+    if (l.vendors?.organizationId) ids.add(l.vendors.organizationId);
+  }
+
+  if (ids.size === 0) return [];
+
+  const rows = await prisma.organizations.findMany({
+    where: { id: { in: [...ids] } },
+    orderBy: { name: "asc" },
+  });
   return rows.map(serializeOrganization);
 }
 
@@ -202,9 +231,9 @@ async function deleteOrganization(user, id) {
 
 async function listBlocks(user) {
   assertView(user);
-  const programId = user.activeProgramId;
+  const programId = requireProgramId(user);
   const rows = await prisma.farm_blocks.findMany({
-    where: programId ? { programId } : undefined,
+    where: { programId },
     orderBy: { code: "asc" },
   });
   return rows.map(serializeBlock);
@@ -304,17 +333,36 @@ async function listFarmAreas(user) {
   return rows.map(serializeFarmArea);
 }
 
-async function syncFarmAreaLinks(estateId, { blockIds = [], vendorIds = [], assetOwnerIds = [] }) {
+async function syncFarmAreaLinks(programId, estateId, { blockIds = [], vendorIds = [], assetOwnerIds = [] }) {
   if (Array.isArray(blockIds)) {
+    if (blockIds.length) {
+      const blocks = await prisma.farm_blocks.findMany({
+        where: { id: { in: blockIds }, programId },
+        select: { id: true },
+      });
+      if (blocks.length !== blockIds.length) {
+        throw new AppError(400, "VALIDATION_ERROR", "One or more blocks are outside the active programme");
+      }
+    }
     await prisma.farm_blocks.updateMany({
-      where: { farmEstateId: estateId, id: { notIn: blockIds } },
+      where: { farmEstateId: estateId, programId, id: { notIn: blockIds } },
       data: { farmEstateId: null, updatedAt: new Date() },
     });
     if (blockIds.length) {
       await prisma.farm_blocks.updateMany({
-        where: { id: { in: blockIds } },
+        where: { id: { in: blockIds }, programId },
         data: { farmEstateId: estateId, updatedAt: new Date() },
       });
+    }
+  }
+
+  if (Array.isArray(vendorIds) && vendorIds.length) {
+    const vendors = await prisma.vendors.findMany({
+      where: { id: { in: vendorIds } },
+      select: { id: true },
+    });
+    if (vendors.length !== vendorIds.length) {
+      throw new AppError(400, "VALIDATION_ERROR", "One or more vendors were not found");
     }
   }
 
@@ -329,6 +377,16 @@ async function syncFarmAreaLinks(estateId, { blockIds = [], vendorIds = [], asse
       })),
       skipDuplicates: true,
     });
+  }
+
+  if (Array.isArray(assetOwnerIds) && assetOwnerIds.length) {
+    const owners = await prisma.asset_owners.findMany({
+      where: { id: { in: assetOwnerIds } },
+      select: { id: true },
+    });
+    if (owners.length !== assetOwnerIds.length) {
+      throw new AppError(400, "VALIDATION_ERROR", "One or more asset owners were not found");
+    }
   }
 
   await prisma.farm_estate_asset_owners.deleteMany({ where: { farmEstateId: estateId } });
@@ -363,7 +421,7 @@ async function createFarmArea(user, input) {
     },
   });
 
-  await syncFarmAreaLinks(created.id, input);
+  await syncFarmAreaLinks(programId, created.id, input);
   const full = await prisma.farm_estates.findUnique({ where: { id: created.id }, include: farmAreaInclude });
   return serializeFarmArea(full);
 }
@@ -387,7 +445,7 @@ async function updateFarmArea(user, id, input) {
       updatedAt: new Date(),
     },
   });
-  await syncFarmAreaLinks(id, input);
+  await syncFarmAreaLinks(programId, id, input);
   const full = await prisma.farm_estates.findUnique({ where: { id }, include: farmAreaInclude });
   return serializeFarmArea(full);
 }
@@ -409,24 +467,38 @@ async function deleteFarmArea(user, id) {
 
 async function listVendors(user) {
   assertView(user);
+  const programId = requireProgramId(user);
   const rows = await prisma.vendors.findMany({
+    where: {
+      farm_estate_vendors: { some: { farm_estates: { programId } } },
+    },
     include: vendorInclude,
     orderBy: { name: "asc" },
   });
   return rows.map(serializeVendor);
 }
 
-async function syncVendorEstateLinks(vendorId, farmAreaIds = [], blockIds = []) {
+async function syncVendorEstateLinks(programId, vendorId, farmAreaIds = [], blockIds = []) {
   const estateIds = new Set(farmAreaIds);
   if (blockIds.length) {
     const blocks = await prisma.farm_blocks.findMany({
-      where: { id: { in: blockIds } },
+      where: { id: { in: blockIds }, programId },
       select: { farmEstateId: true },
     });
+    if (blocks.length !== blockIds.length) {
+      throw new AppError(400, "VALIDATION_ERROR", "One or more blocks are outside the active programme");
+    }
     for (const b of blocks) if (b.farmEstateId) estateIds.add(b.farmEstateId);
   }
   if (estateIds.size === 0) {
     throw new AppError(400, "VALIDATION_ERROR", "Assign the vendor to at least one farm area or block");
+  }
+  const estates = await prisma.farm_estates.findMany({
+    where: { id: { in: [...estateIds] }, programId },
+    select: { id: true },
+  });
+  if (estates.length !== estateIds.size) {
+    throw new AppError(400, "VALIDATION_ERROR", "One or more farm areas are outside the active programme");
   }
   await prisma.farm_estate_vendors.deleteMany({ where: { vendorId } });
   await prisma.farm_estate_vendors.createMany({
@@ -441,6 +513,7 @@ async function syncVendorEstateLinks(vendorId, farmAreaIds = [], blockIds = []) 
 
 async function createVendor(user, input) {
   assertManage(user);
+  const programId = requireProgramId(user);
   const name = String(input.name || "").trim();
   if (!name) throw new AppError(400, "VALIDATION_ERROR", "Name is required");
   let slug = slugify(name) || uuid("vnd").slice(0, 12);
@@ -471,13 +544,14 @@ async function createVendor(user, input) {
       updatedAt: new Date(),
     },
   });
-  await syncVendorEstateLinks(created.id, input.farmAreaIds || [], input.blockIds || []);
+  await syncVendorEstateLinks(programId, created.id, input.farmAreaIds || [], input.blockIds || []);
   const full = await prisma.vendors.findUnique({ where: { id: created.id }, include: vendorInclude });
   return serializeVendor(full);
 }
 
 async function updateVendor(user, id, input) {
   assertManage(user);
+  const programId = requireProgramId(user);
   const existing = await prisma.vendors.findUnique({ where: { id } });
   if (!existing) throw new AppError(404, "NOT_FOUND", "Vendor not found");
   const name = String(input.name || "").trim();
@@ -497,7 +571,7 @@ async function updateVendor(user, id, input) {
     where: { id: existing.organizationId },
     data: { name, displayName: name },
   });
-  await syncVendorEstateLinks(id, input.farmAreaIds || [], input.blockIds || []);
+  await syncVendorEstateLinks(programId, id, input.farmAreaIds || [], input.blockIds || []);
   const full = await prisma.vendors.findUnique({ where: { id }, include: vendorInclude });
   return serializeVendor(full);
 }
@@ -515,14 +589,27 @@ async function deleteVendor(user, id) {
 
 async function listAssetOwners(user) {
   assertView(user);
+  const programId = requireProgramId(user);
   const rows = await prisma.asset_owners.findMany({
+    where: {
+      farm_estate_asset_owners: { some: { farm_estates: { programId } } },
+    },
     include: { farm_estate_asset_owners: true },
     orderBy: { name: "asc" },
   });
   return rows.map(serializeAssetOwner);
 }
 
-async function syncOwnerEstateLinks(assetOwnerId, farmAreaIds = []) {
+async function syncOwnerEstateLinks(programId, assetOwnerId, farmAreaIds = []) {
+  if (farmAreaIds.length) {
+    const estates = await prisma.farm_estates.findMany({
+      where: { id: { in: farmAreaIds }, programId },
+      select: { id: true },
+    });
+    if (estates.length !== farmAreaIds.length) {
+      throw new AppError(400, "VALIDATION_ERROR", "One or more farm areas are outside the active programme");
+    }
+  }
   await prisma.farm_estate_asset_owners.deleteMany({ where: { assetOwnerId } });
   if (farmAreaIds.length) {
     await prisma.farm_estate_asset_owners.createMany({
@@ -538,6 +625,7 @@ async function syncOwnerEstateLinks(assetOwnerId, farmAreaIds = []) {
 
 async function createAssetOwner(user, input) {
   assertManage(user);
+  const programId = requireProgramId(user);
   const name = String(input.name || "").trim();
   if (!name) throw new AppError(400, "VALIDATION_ERROR", "Name is required");
   const created = await prisma.asset_owners.create({
@@ -549,7 +637,7 @@ async function createAssetOwner(user, input) {
       contactPhone: input.contactPhone || null,
     },
   });
-  await syncOwnerEstateLinks(created.id, input.farmAreaIds || []);
+  await syncOwnerEstateLinks(programId, created.id, input.farmAreaIds || []);
   const full = await prisma.asset_owners.findUnique({
     where: { id: created.id },
     include: { farm_estate_asset_owners: true },
@@ -559,6 +647,7 @@ async function createAssetOwner(user, input) {
 
 async function updateAssetOwner(user, id, input) {
   assertManage(user);
+  const programId = requireProgramId(user);
   const existing = await prisma.asset_owners.findUnique({ where: { id } });
   if (!existing) throw new AppError(404, "NOT_FOUND", "Asset owner not found");
   const name = String(input.name || "").trim();
@@ -572,7 +661,7 @@ async function updateAssetOwner(user, id, input) {
       contactPhone: input.contactPhone || null,
     },
   });
-  await syncOwnerEstateLinks(id, input.farmAreaIds || []);
+  await syncOwnerEstateLinks(programId, id, input.farmAreaIds || []);
   const full = await prisma.asset_owners.findUnique({
     where: { id },
     include: { farm_estate_asset_owners: true },

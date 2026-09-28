@@ -166,6 +166,45 @@ function isSpxRole(role) {
   return SPX_ROLES.includes(role);
 }
 
+/**
+ * Silva / asset-owner approvers (farm_owner Cropfort desk + Silva org roles).
+ * These roles decide submitted plans / AFEs / MWOs / weekly — they do not create plans.
+ */
+function isAssetOwnerApprover(userOrRole) {
+  if (userOrRole == null) return false;
+  if (typeof userOrRole === "string") {
+    return isSilvaRole(userOrRole) || userOrRole === "farm_owner" || userOrRole === "system_admin";
+  }
+  const role = userOrRole.role;
+  if (isSilvaRole(role) || role === "farm_owner" || role === "system_admin") return true;
+  const cf = userOrRole.cropfortRoles || [];
+  return cf.includes("farm_owner");
+}
+
+/** SPX creates / edits programme & operational plan scope. */
+function canCreateOrEditPlans(userOrRole) {
+  if (userOrRole == null) return false;
+  if (typeof userOrRole === "string") {
+    return (
+      isSpxRole(userOrRole) ||
+      userOrRole === "spx_platform_admin" ||
+      userOrRole === "spx_validator" ||
+      userOrRole === "system_admin"
+    );
+  }
+  const role = userOrRole.role;
+  if (
+    isSpxRole(role) ||
+    role === "spx_platform_admin" ||
+    role === "spx_validator" ||
+    role === "system_admin"
+  ) {
+    return true;
+  }
+  const cf = userOrRole.cropfortRoles || [];
+  return cf.includes("spx_validator") || cf.includes("spx_platform_admin");
+}
+
 const VENDOR_WORK_PLAN_ROLES = ["vendor_admin", "vendor_manager"];
 const WORK_PLAN_MANAGE_ROLES = [...SPX_ROLES, ...VENDOR_WORK_PLAN_ROLES];
 
@@ -191,6 +230,8 @@ module.exports = {
   isVendorRole,
   isSilvaRole,
   isSpxRole,
+  isAssetOwnerApprover,
+  canCreateOrEditPlans,
   canManageWorkPlan,
   orgTypeOf,
   permissionsFor,

@@ -162,6 +162,10 @@ const adminProgramUpdate = z.object({
   name: z.string().min(1).optional(),
   slug: z.string().min(1).optional(),
   status: z.enum(["active", "archived"]).optional(),
+  cropfortAfeBandAMaxEtb: z.number().finite().positive().optional(),
+  cropfortAfeBandBMaxEtb: z.number().finite().positive().optional(),
+  cropfortAfeBandCMaxEtb: z.number().finite().positive().optional(),
+  cropfortCurrency: z.string().min(1).max(8).optional(),
 });
 
 const acceptInvite = z.object({
@@ -211,6 +215,362 @@ const rateCardReject = z.object({
   comment: z.string().min(1),
 });
 
+const planMonth = z.enum([
+  "oct",
+  "nov",
+  "dec",
+  "jan",
+  "feb",
+  "mar",
+  "apr",
+  "may",
+  "jun",
+  "jul",
+  "aug",
+  "sep",
+]);
+const monthIntensity = z.enum(["none", "light", "active", "peak"]);
+
+const programmePlanLine = z.object({
+  id: z.string().optional(),
+  activityId: z.string().min(1),
+  activityCode: z.string().optional(),
+  activityName: z.string().optional(),
+  category: z.string().optional(),
+  uom: z.string().optional(),
+  scope: z.enum(["block", "off_block"]).optional(),
+  included: z.boolean().optional(),
+  plannedQty: z.number().finite().nonnegative().optional(),
+  unitRateEtb: z.number().finite().nonnegative().nullable().optional(),
+  rateCardId: z.string().nullable().optional(),
+  rateSource: z.string().nullable().optional(),
+  rateStatus: z.enum(["VALID", "MISSING", "EXPIRED", "UNAPPROVED", "OVERRIDDEN"]).optional(),
+  agreedRate: z
+    .object({
+      rateCardId: z.string().optional(),
+      unitRateEtb: z.number().finite().nonnegative(),
+      costKind: z.string().optional(),
+      normMdPerUnit: z.number().nullable().optional(),
+      approvedAt: z.string().nullable().optional(),
+    })
+    .nullable()
+    .optional(),
+  intensities: z.record(z.string(), monthIntensity).optional(),
+  blockAllocations: z
+    .array(
+      z.object({
+        blockId: z.string(),
+        blockCode: z.string().optional(),
+        qty: z.number().finite().nonnegative(),
+      }),
+    )
+    .optional(),
+  manualsRef: z.string().optional(),
+  serviceType: z.string().optional(),
+  notes: z.string().nullable().optional(),
+});
+
+const programmePlanCreate = z.object({
+  name: z.string().min(1),
+  farmEstateId: z.string().min(1),
+  planYear: z.number().int().min(2000).max(2100),
+  planningCycleLabel: z.string().optional(),
+  budgetYearLabel: z.string().optional(),
+  description: z.string().optional(),
+  notes: z.string().optional(),
+  vendorLabel: z.string().optional(),
+  code: z.string().optional(),
+  applicableBlockIds: z.array(z.string()).optional(),
+});
+
+const programmePlanUpsert = z.object({
+  name: z.string().min(1).optional(),
+  description: z.string().optional(),
+  planningCycleLabel: z.string().optional(),
+  notes: z.string().optional(),
+  vendorLabel: z.string().optional(),
+  budgetYearLabel: z.string().optional(),
+  programBandSetId: z.string().nullable().optional(),
+  totalHa: z.number().finite().nonnegative().optional(),
+  applicableBlockIds: z.array(z.string()).optional(),
+  status: z.enum(["draft", "finalized", "ready_for_review", "submitted"]).optional(),
+  lines: z.array(programmePlanLine).optional(),
+  activities: z.record(z.string(), programmePlanLine).optional(),
+});
+
+const programmePlanSchedule = z.object({
+  lines: z
+    .array(
+      z.object({
+        id: z.string().optional(),
+        lineId: z.string().optional(),
+        intensities: z.record(z.string(), monthIntensity).optional(),
+        from: planMonth.optional(),
+        to: planMonth.optional(),
+        intensity: monthIntensity.optional(),
+      }),
+    )
+    .min(1),
+});
+
+const programmePlanDecide = z.object({
+  decision: z.enum(["approve", "return"]),
+  comment: z.string().optional(),
+});
+
+const cropfortAfeCreate = z.object({
+  title: z.string().min(1),
+  amountEtb: z.number().finite().nonnegative(),
+  band: z.enum(["A", "B", "C", "D"]).optional(),
+  sourceType: z
+    .enum(["afp_line", "weekly_submission", "intervention", "project", "manual"])
+    .optional(),
+  sourceId: z.string().nullable().optional(),
+});
+
+const cropfortAfeDecide = z.object({
+  decision: z.enum(["approve", "return"]),
+  comment: z.string().optional(),
+});
+
+const paymentRequestCreate = z.object({
+  fieldTicketId: z.string().min(1),
+});
+
+const paymentRequestReturn = z.object({
+  comment: z.string().min(1).optional(),
+});
+
+const paymentRequestAuthorizeSettlement = z.object({
+  narrative: z.string().optional(),
+});
+
+const weeklyPlanLine = z.object({
+  monthlyLineId: z.string().optional(),
+  activityId: z.string().optional(),
+  activityCode: z.string().optional(),
+  activityName: z.string().min(1),
+  blockId: z.string().optional(),
+  blockCode: z.string().optional(),
+  qty: z.number().finite().nonnegative(),
+  unit: z.string().optional(),
+  crew: z.string().optional(),
+  materials: z.string().optional(),
+  manualsRef: z.string().optional(),
+  etb: z.number().finite().nonnegative(),
+});
+
+const weeklyPlanCreate = z.object({
+  weekLabel: z.string().min(1),
+  code: z.string().optional(),
+  monthlyWoId: z.string().nullable().optional(),
+  monthlyWoCode: z.string().nullable().optional(),
+  note: z.string().optional(),
+  loop: z.string().optional(),
+  directInstructionIds: z.array(z.string()).optional(),
+  lines: z.array(weeklyPlanLine).min(1),
+});
+
+const weeklyPlanDecide = z.object({
+  decision: z.enum(["approve", "return"]),
+  comment: z.string().optional(),
+});
+
+const weeklyPlanLoop = z.object({
+  loop: z.string().min(1),
+});
+
+const monthlyWoLine = z.object({
+  activityId: z.string().optional(),
+  activityCode: z.string().optional(),
+  activityName: z.string().min(1),
+  blockId: z.string().optional(),
+  blockCode: z.string().optional(),
+  plannedQty: z.number().finite().nonnegative(),
+  unit: z.string().optional(),
+  etb: z.number().finite().nonnegative(),
+  manualsRef: z.string().optional(),
+  inPlan: z.boolean().optional(),
+});
+
+const monthlyWoCreate = z.object({
+  ethiopianMonth: z.string().min(1),
+  yearGc: z.number().int().min(2000).max(2100),
+  code: z.string().optional(),
+  farmId: z.string().nullable().optional(),
+  farmName: z.string().optional(),
+  sourcePlanId: z.string().nullable().optional(),
+  outOfPlanReason: z.string().optional(),
+  loop: z.string().optional(),
+  lastMonthInsights: z.string().optional(),
+  structuredInsights: z.any().optional(),
+  recommendedAdjustments: z.array(z.any()).optional(),
+  note: z.string().optional(),
+  lines: z.array(monthlyWoLine).min(1),
+});
+
+const monthlyWoDecide = z.object({
+  decision: z.enum(["approve", "return"]),
+  comment: z.string().optional(),
+});
+
+const monthlyWoLoop = z.object({
+  loop: z.string().min(1),
+});
+
+const monthlyWoAddOutOfPlanLine = z.object({
+  activityName: z.string().min(1),
+  activityCode: z.string().optional(),
+  activityId: z.string().optional(),
+  blockId: z.string().optional(),
+  blockCode: z.string().optional(),
+  plannedQty: z.number().finite().nonnegative(),
+  unit: z.string().optional(),
+  etb: z.number().finite().nonnegative(),
+  manualsRef: z.string().optional(),
+  reason: z.string().min(1),
+});
+
+const directInstructionIssue = z.object({
+  title: z.string().min(1),
+  description: z.string().optional(),
+  amountEtb: z.number().finite().nonnegative(),
+  blockId: z.string().optional(),
+  blockCode: z.string().optional(),
+  monthlyWoId: z.string().nullable().optional(),
+  monthlyWoCode: z.string().nullable().optional(),
+  weeklyPlanId: z.string().nullable().optional(),
+  weeklyPlanLineId: z.string().nullable().optional(),
+  workOrderId: z.string().nullable().optional(),
+  oral: z.boolean().optional(),
+  code: z.string().optional(),
+});
+
+const dfrCreate = z.object({
+  activityName: z.string().min(1),
+  activityCode: z.string().optional(),
+  activityId: z.string().optional(),
+  weeklyPlanId: z.string().optional(),
+  weeklyPlanLineId: z.string().optional(),
+  monthlyWoId: z.string().optional(),
+  monthlyWoCode: z.string().optional(),
+  monthlyLineId: z.string().optional(),
+  workOrderId: z.string().nullable().optional(),
+  date: z.string().optional(),
+  blockId: z.string().optional(),
+  blockCode: z.string().optional(),
+  plannedQty: z.number().finite().nonnegative(),
+  actualQty: z.number().finite().nonnegative().optional().default(0),
+  unit: z.string().optional(),
+  laborHours: z.number().finite().nonnegative().optional(),
+  materialsUsed: z.array(z.string()).optional(),
+  notes: z.string().optional(),
+  entrySource: z.string().optional(),
+  missCause: z.string().nullable().optional(),
+  code: z.string().optional(),
+});
+
+const dfrUpdate = z.object({
+  actualQty: z.number().finite().nonnegative().optional(),
+  plannedQty: z.number().finite().nonnegative().optional(),
+  laborHours: z.number().finite().nonnegative().optional(),
+  notes: z.string().optional(),
+  materialsUsed: z.array(z.string()).optional(),
+  date: z.string().optional(),
+  missCause: z.string().nullable().optional(),
+});
+
+const dfrSiteCheck = z.object({
+  note: z.string().optional(),
+  qualityScore: z.number().finite().nonnegative().optional(),
+});
+
+const dfrValidate = z.object({
+  note: z.string().optional(),
+  qualityScore: z.number().finite().nonnegative().optional(),
+  missCause: z.string().nullable().optional(),
+});
+
+const dfrReturn = z.object({
+  note: z.string().min(1).optional(),
+  comment: z.string().min(1).optional(),
+  failedCriteria: z.array(z.string()).optional(),
+});
+
+const dfrCorrect = dfrUpdate;
+
+const workOrderCreate = z.object({
+  title: z.string().optional(),
+  activity: z.string().optional(),
+  category: z.string().optional(),
+  tier: z.enum(["retainer", "project", "special"]).optional(),
+  weekStart: z.number().int().min(1).max(53).optional(),
+  weekEnd: z.number().int().min(1).max(53).optional(),
+  week: z.number().int().min(1).max(53).optional(),
+  plannedCostEtb: z.number().finite().nonnegative().optional(),
+  etb: z.number().finite().nonnegative().optional(),
+  farmEstateId: z.string().nullable().optional(),
+  assignedVendorId: z.string().nullable().optional(),
+  afeId: z.string().nullable().optional(),
+  cropfortAfeId: z.string().nullable().optional(),
+  blockId: z.string().optional(),
+  blockIds: z.array(z.string()).optional(),
+  instructions: z.string().nullable().optional(),
+  code: z.string().optional(),
+});
+
+const workOrderUpdate = workOrderCreate.partial();
+
+const workOrderTransition = z.object({
+  status: z.enum(["draft", "issued", "in_progress", "complete", "closed"]),
+});
+
+const fieldTicketCreate = z.object({
+  activityRecorded: z.string().optional(),
+  areaHa: z.number().finite().nonnegative().optional(),
+  laborCount: z.number().int().nonnegative().optional(),
+  materialsUsed: z.string().optional(),
+  actualQuantity: z.number().finite().nonnegative().nullable().optional(),
+  actualMandays: z.number().finite().nonnegative().nullable().optional(),
+  unitRateEtb: z.number().finite().nonnegative().nullable().optional(),
+  ticketDate: z.string().optional(),
+});
+
+const fieldTicketTransition = z.object({
+  status: z.enum(["draft", "submitted", "vendor_reviewed", "validated", "rejected"]),
+  comment: z.string().optional(),
+});
+
+const projectCreate = z.object({
+  title: z.string().min(1),
+  budgetEtb: z.number().finite().positive(),
+  blockId: z.string().min(1),
+  blockCode: z.string().optional(),
+  vendor: z.string().optional(),
+  band: z.enum(["A", "B", "C", "D"]).optional(),
+  notes: z.string().optional(),
+  code: z.string().optional(),
+});
+
+const projectDecide = z.object({
+  decision: z.enum(["approve", "return"]),
+  comment: z.string().optional(),
+});
+
+const interventionCreate = z.object({
+  title: z.string().min(1),
+  costEtb: z.number().finite().positive(),
+  blockId: z.string().min(1),
+  blockCode: z.string().optional(),
+  vendor: z.string().optional(),
+  band: z.enum(["A", "B", "C", "D"]).optional(),
+  code: z.string().optional(),
+});
+
+const linkAfe = z.object({
+  cropfortAfeId: z.string().min(1),
+});
+
 module.exports = {
   login,
   refresh,
@@ -246,4 +606,36 @@ module.exports = {
   rateCardLineItem,
   rateCardLineItemUpdate,
   rateCardReject,
+  programmePlanCreate,
+  programmePlanUpsert,
+  programmePlanSchedule,
+  programmePlanDecide,
+  cropfortAfeCreate,
+  cropfortAfeDecide,
+  paymentRequestCreate,
+  paymentRequestReturn,
+  paymentRequestAuthorizeSettlement,
+  weeklyPlanCreate,
+  weeklyPlanDecide,
+  weeklyPlanLoop,
+  monthlyWoCreate,
+  monthlyWoDecide,
+  monthlyWoLoop,
+  monthlyWoAddOutOfPlanLine,
+  directInstructionIssue,
+  dfrCreate,
+  dfrUpdate,
+  dfrSiteCheck,
+  dfrValidate,
+  dfrReturn,
+  dfrCorrect,
+  workOrderCreate,
+  workOrderUpdate,
+  workOrderTransition,
+  fieldTicketCreate,
+  fieldTicketTransition,
+  projectCreate,
+  projectDecide,
+  interventionCreate,
+  linkAfe,
 };

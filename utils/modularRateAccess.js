@@ -1,5 +1,5 @@
 const AppError = require("../utils/AppError");
-const { isSilvaRole, isSpxRole } = require("../utils/roles");
+const { isSilvaRole, isSpxRole, isAssetOwnerApprover, canCreateOrEditPlans } = require("./roles");
 
 function normalizeRole(role) {
   return String(role || "");
@@ -19,18 +19,11 @@ function canViewModularRates(role) {
 }
 
 function canEditModularRates(role) {
-  const r = normalizeRole(role);
-  return (
-    isSpxRole(r) ||
-    r === "system_admin" ||
-    r === "spx_validator" ||
-    r === "spx_platform_admin"
-  );
+  return canCreateOrEditPlans(role);
 }
 
 function canDecideModularRates(role) {
-  const r = normalizeRole(role);
-  return isSilvaRole(r) || r === "farm_owner" || r === "system_admin" || r === "spx_platform_admin";
+  return isAssetOwnerApprover(role);
 }
 
 function requireProgramId(user) {
@@ -42,15 +35,21 @@ function requireProgramId(user) {
 }
 
 function assertView(user) {
-  if (!canViewModularRates(user.role)) throw new AppError(403, "FORBIDDEN", "Insufficient permissions");
+  if (!canViewModularRates(user.role) && !(user.cropfortRoles || []).includes("farm_owner")) {
+    throw new AppError(403, "FORBIDDEN", "Insufficient permissions");
+  }
 }
 
 function assertEdit(user) {
-  if (!canEditModularRates(user.role)) throw new AppError(403, "FORBIDDEN", "Insufficient permissions");
+  if (!canCreateOrEditPlans(user)) {
+    throw new AppError(403, "FORBIDDEN", "Only SPX can create or edit plans");
+  }
 }
 
 function assertDecide(user) {
-  if (!canDecideModularRates(user.role)) throw new AppError(403, "FORBIDDEN", "Insufficient permissions");
+  if (!isAssetOwnerApprover(user)) {
+    throw new AppError(403, "FORBIDDEN", "Only Silva / asset owners can approve");
+  }
 }
 
 module.exports = {

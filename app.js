@@ -26,21 +26,32 @@ app.use(
 app.use(express.json({ limit: "2mb" }));
 app.use(requestId);
 
+async function healthPayload() {
+  try {
+    await prisma.$queryRaw`SELECT 1`;
+    return { ok: true, db: true };
+  } catch {
+    return { ok: false, db: false };
+  }
+}
+
 app.get("/health", async (_req, res) => {
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-    res.json({ data: { ok: true, db: true } });
-  } catch {
-    res.status(503).json({ data: { ok: false, db: false } });
-  }
+  res.json({ data: { ok: true } });
 });
+
+app.get("/ready", async (_req, res) => {
+  const data = await healthPayload();
+  res.status(data.db ? 200 : 503).json({ data });
+});
+
 app.get("/api/v1/health", async (_req, res) => {
-  try {
-    await prisma.$queryRaw`SELECT 1`;
-    res.json({ data: { ok: true, db: true } });
-  } catch {
-    res.status(503).json({ data: { ok: false, db: false } });
-  }
+  const data = await healthPayload();
+  res.status(data.db ? 200 : 503).json({ data });
+});
+
+app.get("/api/v1/ready", async (_req, res) => {
+  const data = await healthPayload();
+  res.status(data.db ? 200 : 503).json({ data });
 });
 
 app.use("/api/v1/auth", authRoutes);
@@ -52,6 +63,21 @@ app.use("/api/v1/rate-card-proposals", require("./routes/rateCardProposals.route
 app.use("/api/v1/users", usersRoutes);
 app.use("/api/v1/org-map", orgMapRoutes);
 app.use("/api/v1/programs", require("./routes/programs.routes"));
+app.use("/api/v1/programme-plans", require("./routes/programmePlans.routes"));
+app.use("/api/v1/work-orders", require("./routes/workOrders.routes"));
+app.use("/api/v1/afes", require("./routes/cropfortAfes.routes"));
+app.use("/api/v1/weekly-plans", require("./routes/cropfortWeeklyPlans.routes"));
+app.use("/api/v1/monthly-work-orders", require("./routes/cropfortMonthlyWorkOrders.routes"));
+app.use("/api/v1/daily-field-records", require("./routes/cropfortDailyFieldRecords.routes"));
+app.use("/api/v1/direct-instructions", require("./routes/cropfortDirectInstructions.routes"));
+app.use("/api/v1/audit-log", require("./routes/auditLog.routes"));
+app.use("/api/v1/projects", require("./routes/cropfortProjects.routes"));
+app.use("/api/v1/interventions", require("./routes/cropfortInterventions.routes"));
+app.use("/api/v1/plan-scenarios", require("./routes/cropfortScenarios.routes"));
+app.use("/api/v1/reports", require("./routes/cropfortReports.routes"));
+app.use("/api/v1/message-threads", require("./routes/cropfortMessages.routes"));
+app.use("/api/v1/agreement-config", require("./routes/cropfortAgreementConfig.routes"));
+app.use("/api/v1/payment-requests", require("./routes/paymentRequests.routes"));
 app.use("/api/v1/notifications", require("./routes/notifications.routes"));
 
 // Legacy modular period rate cards + catalogs retired (Cropfort Excel model).
