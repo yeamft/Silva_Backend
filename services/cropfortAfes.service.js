@@ -1,8 +1,9 @@
 const AppError = require("../utils/AppError");
 const prisma = require("../config/database");
 const { uuid } = require("../utils/ids");
-const { permissionsFor, isSpxRole, isAssetOwnerApprover } = require("../utils/roles");
+const { permissionsFor, isSpxRole, isSilvaRole, isAssetOwnerApprover } = require("../utils/roles");
 const { Prisma } = require("@prisma/client");
+const notifications = require("./notifications.service");
 
 function requireProgramId(user) {
   if (!user.activeProgramId) {
@@ -198,7 +199,13 @@ exports.submitAfe = async (user, id) => {
     before: { status: existing.status },
     after: { status: "submitted" },
   });
-  return serialize(updated);
+  const dto = serialize(updated);
+  try {
+    await notifications.notifyAfeSubmitted(programId, dto);
+  } catch (err) {
+    console.error("[afes] notifyAfeSubmitted failed:", err?.message || err);
+  }
+  return dto;
 };
 
 exports.decideAfe = async (user, id, { decision, comment } = {}) => {
@@ -234,5 +241,11 @@ exports.decideAfe = async (user, id, { decision, comment } = {}) => {
     before: { status: existing.status },
     after: { status: updated.status, comment: comment || null },
   });
-  return serialize(updated);
+  const dto = serialize(updated);
+  try {
+    await notifications.notifyAfeDecision(programId, { ...dto, createdByUserId: existing.createdByUserId }, d, user.name);
+  } catch (err) {
+    console.error("[afes] notifyAfeDecision failed:", err?.message || err);
+  }
+  return dto;
 };

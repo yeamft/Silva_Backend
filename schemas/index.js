@@ -534,6 +534,7 @@ const fieldTicketCreate = z.object({
   actualMandays: z.number().finite().nonnegative().nullable().optional(),
   unitRateEtb: z.number().finite().nonnegative().nullable().optional(),
   ticketDate: z.string().optional(),
+  vendorUserId: z.string().nullable().optional(),
 });
 
 const fieldTicketTransition = z.object({

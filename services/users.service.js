@@ -280,6 +280,37 @@ async function listUsers(actor) {
   return rows.map(serializeUser);
 }
 
+/**
+ * Active programme user directory for assignee pickers (field tickets, etc.).
+ * Any authenticated user with an active programme can read — not admin-only.
+ */
+async function listDirectory(actor) {
+  const programId = actor.activeProgramId;
+  if (!programId) {
+    throw new AppError(400, "NO_ACTIVE_PROGRAM", "Select an active programme first");
+  }
+
+  const memberships = await prisma.program_memberships.findMany({
+    where: { programId },
+    select: { organizationId: true },
+  });
+  const orgIds = [...new Set(memberships.map((m) => m.organizationId).filter(Boolean))];
+
+  const rows = await prisma.users.findMany({
+    where: {
+      active: true,
+      accountStatus: "active",
+      OR: [
+        { activeProgramId: programId },
+        ...(orgIds.length ? [{ organizationId: { in: orgIds } }] : []),
+      ],
+    },
+    include: userInclude,
+    orderBy: { name: "asc" },
+  });
+  return rows.map(serializeUser);
+}
+
 async function getMeta(actor) {
   assertManage(actor);
   const [programs, blocks] = await Promise.all([
@@ -618,6 +649,7 @@ async function acceptInvite({ token, name, password }) {
 
 module.exports = {
   listUsers,
+  listDirectory,
   getMeta,
   createUser,
   updateUser,

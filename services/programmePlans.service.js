@@ -5,6 +5,7 @@ const { loadFarmForUser, requireProgramId, num } = require("../utils/farmRateAcc
 const { assertView, assertEdit, assertDecide } = require("../utils/modularRateAccess");
 const { isSpxRole, isAssetOwnerApprover } = require("../utils/roles");
 const { Prisma } = require("@prisma/client");
+const notifications = require("./notifications.service");
 
 const PLAN_MONTHS = [
   "oct",
@@ -688,6 +689,19 @@ exports.submitPlan = async (user, planId) => {
   });
 
   const planPayload = planJson(updated);
+
+  if (!autoApprove) {
+    try {
+      await notifications.notifyProgrammePlanSubmitted(plan.programId, {
+        ...planPayload,
+        submittedByUserId: updated.submittedByUserId,
+        createdByUserId: updated.createdByUserId || plan.createdByUserId,
+      });
+    } catch (err) {
+      console.error("[programme-plans] notifyProgrammePlanSubmitted failed:", err?.message || err);
+    }
+  }
+
   return {
     plan: planPayload,
     readiness,
@@ -746,7 +760,23 @@ exports.decidePlan = async (user, planId, { decision, comment }) => {
     after: { status: updated.status, comment: comment || null },
   });
 
-  return planJson(updated);
+  const payload = planJson(updated);
+  try {
+    await notifications.notifyProgrammePlanDecision(
+      plan.programId,
+      {
+        ...payload,
+        submittedByUserId: updated.submittedByUserId || plan.submittedByUserId,
+        createdByUserId: updated.createdByUserId || plan.createdByUserId,
+      },
+      d,
+      user.name,
+    );
+  } catch (err) {
+    console.error("[programme-plans] notifyProgrammePlanDecision failed:", err?.message || err);
+  }
+
+  return payload;
 };
 
 exports.listPlans = async (user, { farmEstateId, planYear, status, q, includeArchived } = {}) => {

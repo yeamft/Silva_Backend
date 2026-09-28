@@ -9,6 +9,7 @@ const router = express.Router();
 router.use(authenticateJWT);
 
 router.get("/", usersController.list);
+router.get("/directory", usersController.directory);
 router.get("/meta", usersController.meta);
 router.post("/", validate(schemas.adminUser), usersController.create);
 router.patch("/:id", validate(schemas.adminUser), usersController.update);

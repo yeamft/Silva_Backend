@@ -105,7 +105,32 @@ async function main() {
     }
   }
 
+  await prisma.vendors.upsert({
+    where: { organizationId: bagro.id },
+    update: {
+      name: "B-Agro / RFSP",
+      category: "Estate execution",
+      status: "active",
+      prequalified: true,
+      isDefaultExecutionPartner: true,
+      updatedAt: new Date(),
+    },
+    create: {
+      id: "vnd_bagro",
+      organizationId: bagro.id,
+      name: "B-Agro / RFSP",
+      category: "Estate execution",
+      servicesProvided: "Field execution",
+      prequalified: true,
+      insuranceOnFile: true,
+      status: "active",
+      isDefaultExecutionPartner: true,
+      updatedAt: new Date(),
+    },
+  });
+
   const users = [
+    // Silva
     {
       id: "usr_silva_owner",
       name: "Amara Silva",
@@ -113,6 +138,21 @@ async function main() {
       role: "silva_owner",
       organizationId: silva.id,
     },
+    {
+      id: "usr_silva_cm",
+      name: "Sara Country Manager",
+      email: "cm@silva.example",
+      role: "silva_country_manager",
+      organizationId: silva.id,
+    },
+    {
+      id: "usr_silva_finance",
+      name: "Helen Finance",
+      email: "finance@silva.example",
+      role: "silva_finance",
+      organizationId: silva.id,
+    },
+    // SPX
     {
       id: "usr_system_admin",
       name: "System Admin",
@@ -128,10 +168,53 @@ async function main() {
       organizationId: spx.id,
     },
     {
+      id: "usr_spx_handler",
+      name: "Maya Account Handler",
+      email: "handler@spx.example",
+      role: "spx_account_handler",
+      organizationId: spx.id,
+    },
+    {
+      id: "usr_spx_supervisor",
+      name: "Jonas Field Supervisor",
+      email: "supervisor@spx.example",
+      role: "spx_field_supervisor",
+      organizationId: spx.id,
+    },
+    // Vendor (B-Agro / RFSP)
+    {
+      id: "usr_bagro_admin",
+      name: "Tigist Vendor Admin",
+      email: "admin@bagro.example",
+      role: "vendor_admin",
+      organizationId: bagro.id,
+    },
+    {
+      id: "usr_bagro_manager",
+      name: "Yonas Vendor Manager",
+      email: "manager@bagro.example",
+      role: "vendor_manager",
+      organizationId: bagro.id,
+    },
+    {
+      id: "usr_bagro_supervisor",
+      name: "Betty Site Supervisor",
+      email: "supervisor@bagro.example",
+      role: "vendor_supervisor",
+      organizationId: bagro.id,
+    },
+    {
       id: "usr_bagro_lead",
       name: "Lemma Bekele",
       email: "lead@bagro.example",
       role: "vendor_field_lead",
+      organizationId: bagro.id,
+    },
+    {
+      id: "usr_bagro_worker",
+      name: "Abebe Field Worker",
+      email: "worker@bagro.example",
+      role: "vendor_worker",
       organizationId: bagro.id,
     },
   ];
@@ -192,6 +275,7 @@ async function main() {
       resourceType: "labour",
       unitOfMeasure: "person-day",
       rateEtb: 450,
+      budgetYear: 2026,
       benchmarkFarmARate: 420,
       benchmarkFarmBRate: 440,
       status: "approved",
@@ -205,6 +289,7 @@ async function main() {
       resourceType: "labour",
       unitOfMeasure: "kg",
       rateEtb: 18.5,
+      budgetYear: 2026,
       benchmarkFarmARate: 17,
       benchmarkFarmBRate: 19,
       status: "approved",
@@ -218,6 +303,7 @@ async function main() {
       resourceType: "machinery",
       unitOfMeasure: "hour",
       rateEtb: 1850,
+      budgetYear: 2026,
       benchmarkFarmARate: 1400,
       benchmarkFarmBRate: 1450,
       spxJustificationNote: "Peak-season hire shortage",
@@ -232,6 +318,7 @@ async function main() {
       resourceType: "material",
       unitOfMeasure: "t",
       rateEtb: 4200,
+      budgetYear: 2026,
       benchmarkFarmARate: 3900,
       benchmarkFarmBRate: 4100,
       status: "submitted",
@@ -267,10 +354,9 @@ async function main() {
   console.log("Programs: Silva Kaffa Coffee Program, Chaka Buna Estate");
   console.log("Activity taxonomy seeded from Cropfort Coffee Field OS Template");
   console.log("Users (password Password123!):");
-  console.log("  owner@silva.example");
-  console.log("  admin@spx.example");
-  console.log("  principal@spx.example");
-  console.log("  lead@bagro.example");
+  for (const u of users) {
+    console.log(`  ${u.email}  (${u.role})`);
+  }
 }
 
 main()

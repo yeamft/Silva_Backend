@@ -3,6 +3,7 @@ const prisma = require("../config/database");
 const { uuid } = require("../utils/ids");
 const { permissionsFor, isSpxRole, isSilvaRole } = require("../utils/roles");
 const { Prisma } = require("@prisma/client");
+const notifications = require("./notifications.service");
 
 function requireProgramId(user) {
   if (!user.activeProgramId) {
@@ -244,7 +245,13 @@ async function createPaymentRequest(user, { fieldTicketId }) {
     },
     include: PR_INCLUDE,
   });
-  return serializePr(created);
+  const dto = serializePr(created);
+  try {
+    await notifications.notifyPaymentRequestCreated(programId, dto);
+  } catch (err) {
+    console.error("[payments] notifyPaymentRequestCreated failed:", err?.message || err);
+  }
+  return dto;
 }
 
 async function verifyPaymentRequest(user, id) {
@@ -274,7 +281,13 @@ async function verifyPaymentRequest(user, id) {
     },
     include: PR_INCLUDE,
   });
-  return serializePr(updated);
+  const dto = serializePr(updated);
+  try {
+    await notifications.notifyPaymentRequestVerified(programId, dto);
+  } catch (err) {
+    console.error("[payments] notifyPaymentRequestVerified failed:", err?.message || err);
+  }
+  return dto;
 }
 
 async function returnPaymentRequest(user, id, { comment } = {}) {
@@ -299,6 +312,11 @@ async function returnPaymentRequest(user, id, { comment } = {}) {
   });
   const dto = serializePr(updated);
   dto.returnComment = (comment && String(comment).trim()) || "Returned for correction";
+  try {
+    await notifications.notifyPaymentRequestReturned(programId, dto, user.name);
+  } catch (err) {
+    console.error("[payments] notifyPaymentRequestReturned failed:", err?.message || err);
+  }
   return dto;
 }
 
@@ -353,7 +371,13 @@ async function authorizeSettlement(user, paymentRequestId, { narrative } = {}) {
     }),
   ]);
 
-  return serializeSettlement(settlement, pr);
+  const dto = serializeSettlement(settlement, pr);
+  try {
+    await notifications.notifySettlementAuthorized(programId, dto, pr);
+  } catch (err) {
+    console.error("[payments] notifySettlementAuthorized failed:", err?.message || err);
+  }
+  return dto;
 }
 
 async function listSettlements(user) {
@@ -414,7 +438,13 @@ async function markSettlementSettled(user, id) {
       payment_requests: { include: { field_tickets: true } },
     },
   });
-  return serializeSettlement(updated, updated.payment_requests);
+  const dto = serializeSettlement(updated, updated.payment_requests);
+  try {
+    await notifications.notifySettlementSettled(programId, dto);
+  } catch (err) {
+    console.error("[payments] notifySettlementSettled failed:", err?.message || err);
+  }
+  return dto;
 }
 
 module.exports = {

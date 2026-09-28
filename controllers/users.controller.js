@@ -6,6 +6,11 @@ exports.list = catchAsync(async (req, res) => {
   res.json({ data });
 });
 
+exports.directory = catchAsync(async (req, res) => {
+  const data = await usersService.listDirectory(req.user);
+  res.json({ data });
+});
+
 exports.meta = catchAsync(async (req, res) => {
   const data = await usersService.getMeta(req.user);
   res.json({ data });

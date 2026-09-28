@@ -1,7 +1,7 @@
 const AppError = require("../utils/AppError");
 const prisma = require("../config/database");
 const { uuid } = require("../utils/ids");
-const { permissionsFor, isSpxRole, isAssetOwnerApprover } = require("../utils/roles");
+const { permissionsFor, isSpxRole, isSilvaRole, isVendorRole, isAssetOwnerApprover } = require("../utils/roles");
 const { Prisma } = require("@prisma/client");
 const workOrders = require("./workOrders.service");
 
@@ -20,7 +20,8 @@ function hasPerm(user, key) {
     cf.includes("spx_validator") ||
     cf.includes("spx_platform_admin") ||
     cf.includes("farm_owner") ||
-    cf.includes("field_supervisor")
+    cf.includes("field_supervisor") ||
+    cf.includes("bagro_office")
   ) {
     return true;
   }
@@ -32,6 +33,7 @@ function assertRead(user) {
     hasPerm(user, "work_orders.read") ||
     isSpxRole(user.role) ||
     isSilvaRole(user.role) ||
+    isVendorRole(user.role) ||
     user.role === "system_admin" ||
     user.role === "spx_platform_admin" ||
     user.role === "spx_validator" ||

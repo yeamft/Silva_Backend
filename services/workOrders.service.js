@@ -3,6 +3,7 @@ const prisma = require("../config/database");
 const { uuid } = require("../utils/ids");
 const { permissionsFor, isSpxRole, isVendorRole, isSilvaRole } = require("../utils/roles");
 const { Prisma } = require("@prisma/client");
+const notifications = require("./notifications.service");
 
 const WO_TRANSITIONS = {
   draft: ["issued"],
@@ -216,8 +217,11 @@ exports.listWorkOrders = async (user, { status, farmEstateId } = {}) => {
       where: { organizationId: user.organizationId },
       select: { id: true },
     });
-    if (!vendor) return [];
-    where.assignedVendorId = vendor.id;
+    if (vendor) {
+      // Own WOs plus open (unassigned) WOs so field leads can pick up work.
+      where.OR = [{ assignedVendorId: vendor.id }, { assignedVendorId: null }];
+    }
+    // If no vendor master record exists yet, do not collapse to an empty list.
   }
 
   const rows = await prisma.work_orders.findMany({
@@ -410,6 +414,15 @@ exports.transitionWorkOrder = async (user, id, { status }) => {
     before: { status: existing.status },
     after: { status: next },
   });
+
+  if (next === "issued") {
+    try {
+      await notifications.notifyWorkOrderIssued(existing.programId, serializeWo(updated));
+    } catch (err) {
+      console.error("[work-orders] notifyWorkOrderIssued failed:", err?.message || err);
+    }
+  }
+
   return serializeWo(updated);
 };
 
@@ -471,6 +484,27 @@ exports.createFieldTicket = async (user, workOrderId, body) => {
       where: { id: wo.id },
       data: { status: "in_progress", updatedAt: new Date() },
     });
+  }
+
+  // Link WO to vendor org when a vendor user is named on assign.
+  const vendorUserId = body.vendorUserId ? String(body.vendorUserId) : null;
+  if (vendorUserId) {
+    const vendorUser = await prisma.users.findFirst({
+      where: { id: vendorUserId },
+      select: { organizationId: true },
+    });
+    if (vendorUser?.organizationId) {
+      const vendor = await prisma.vendors.findFirst({
+        where: { organizationId: vendorUser.organizationId },
+        select: { id: true },
+      });
+      if (vendor) {
+        await prisma.work_orders.update({
+          where: { id: wo.id },
+          data: { assignedVendorId: vendor.id, updatedAt: new Date() },
+        });
+      }
+    }
   }
 
   await recordAudit({
@@ -540,6 +574,18 @@ exports.transitionFieldTicket = async (user, ticketId, { status, comment } = {})
     before: { status: existing.status },
     after: { status: next, comment: comment || null },
   });
+
+  try {
+    await notifications.notifyFieldTicketStatus(
+      programId,
+      { ...updated, submittedByUserId: existing.submittedByUserId },
+      next,
+      user.name,
+    );
+  } catch (err) {
+    console.error("[work-orders] notifyFieldTicketStatus failed:", err?.message || err);
+  }
+
   return serializeTicket(updated);
 };
 

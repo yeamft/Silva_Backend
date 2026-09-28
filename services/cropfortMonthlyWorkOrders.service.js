@@ -1,7 +1,7 @@
 const AppError = require("../utils/AppError");
 const prisma = require("../config/database");
 const { uuid } = require("../utils/ids");
-const { permissionsFor, isSpxRole, isAssetOwnerApprover } = require("../utils/roles");
+const { permissionsFor, isSpxRole, isSilvaRole, isVendorRole, isAssetOwnerApprover } = require("../utils/roles");
 const { Prisma } = require("@prisma/client");
 
 function requireProgramId(user) {
@@ -17,7 +17,8 @@ function hasCf(user) {
     cf.includes("spx_validator") ||
     cf.includes("spx_platform_admin") ||
     cf.includes("farm_owner") ||
-    cf.includes("field_supervisor")
+    cf.includes("field_supervisor") ||
+    cf.includes("bagro_office")
   );
 }
 
@@ -28,6 +29,7 @@ function assertRead(user) {
     hasCf(user) ||
     isSpxRole(user.role) ||
     isSilvaRole(user.role) ||
+    isVendorRole(user.role) ||
     ["system_admin", "spx_platform_admin", "spx_validator", "farm_owner", "field_supervisor", "vendor", "vendor_ops"].includes(
       user.role,
     )
