@@ -16,7 +16,7 @@ const prisma = new PrismaClient();
 const DEFAULT_XLSX = path.join(
   __dirname,
   "..",
-  "..",
+  "data",
   "Cropfort Coffee Field OS Template.xlsx",
 );
 

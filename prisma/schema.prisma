@@ -1261,6 +1261,8 @@ model farm_blocks {
   treeCount                    Int?
   varietyPlanted               String?
   plantingDate                 DateTime?                      @db.Date
+  mapLat                       Float?
+  mapLng                       Float?
   status                       FarmBlockStatus                @default(active)
   assignedSupervisorUserId     String?
   createdAt                    DateTime                       @default(now())

@@ -118,6 +118,8 @@ function serializeBlock(row) {
     name: row.label || row.code,
     hectares: num(row.areaHa) ?? 0,
     farmAreaId: row.farmEstateId || null,
+    mapLat: row.mapLat != null ? Number(row.mapLat) : null,
+    mapLng: row.mapLng != null ? Number(row.mapLng) : null,
     status: row.status === "inactive" ? "inactive" : "active",
   };
 }
@@ -266,6 +268,8 @@ async function createBlock(user, input) {
       code,
       label: name,
       areaHa: num(input.hectares ?? input.areaHa),
+      mapLat: num(input.mapLat),
+      mapLng: num(input.mapLng),
       status: input.status === "inactive" ? "inactive" : "active",
       updatedAt: new Date(),
     },
@@ -306,6 +310,8 @@ async function updateBlock(user, id, input) {
       label: name,
       farmEstateId,
       areaHa: num(input.hectares ?? input.areaHa),
+      ...(input.mapLat !== undefined ? { mapLat: num(input.mapLat) } : {}),
+      ...(input.mapLng !== undefined ? { mapLng: num(input.mapLng) } : {}),
       status: input.status === "inactive" ? "inactive" : "active",
       updatedAt: new Date(),
     },

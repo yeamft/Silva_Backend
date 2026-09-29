@@ -12,19 +12,35 @@ function buildAllowedOrigins() {
   const origins = new Set([
     ...parseOriginList(process.env.CORS_ORIGINS),
     ...parseOriginList(process.env.CLIENT_URL),
+    ...parseOriginList(process.env.FRONTEND_URL),
     env.APP_BASE_URL,
+    // Production Vercel frontend
+    "https://silva-frontend-pi.vercel.app",
   ]);
 
-  if (env.NODE_ENV !== "production") {
-    origins.add("http://localhost:3000");
-    origins.add("http://localhost:3001");
-    origins.add("http://localhost:8080");
-    origins.add("http://127.0.0.1:3000");
-    origins.add("http://127.0.0.1:3001");
-    origins.add("http://127.0.0.1:8080");
-  }
+  // Local / preview hosts
+  origins.add("http://localhost:3000");
+  origins.add("http://localhost:3001");
+  origins.add("http://localhost:8080");
+  origins.add("http://127.0.0.1:3000");
+  origins.add("http://127.0.0.1:3001");
+  origins.add("http://127.0.0.1:8080");
 
   return [...origins].filter(Boolean);
+}
+
+function isVercelPreviewOrigin(origin) {
+  // Allow this project's Vercel preview URLs (silva-frontend-*.vercel.app)
+  try {
+    const { hostname, protocol } = new URL(origin);
+    if (protocol !== "https:") return false;
+    return (
+      hostname === "silva-frontend-pi.vercel.app" ||
+      /^silva-frontend(-[a-z0-9-]+)?\.vercel\.app$/i.test(hostname)
+    );
+  } catch {
+    return false;
+  }
 }
 
 const allowedOrigins = buildAllowedOrigins();
@@ -34,7 +50,10 @@ const corsOptions = {
     // Same-origin or non-browser clients (curl, Postman)
     if (!origin) return callback(null, true);
     const normalized = origin.replace(/\/$/, "");
-    if (allowedOrigins.includes(normalized)) return callback(null, true);
+    if (allowedOrigins.includes(normalized) || isVercelPreviewOrigin(normalized)) {
+      return callback(null, true);
+    }
+    console.warn(`[cors] blocked origin: ${normalized}`);
     return callback(null, false);
   },
   credentials: true,

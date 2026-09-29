@@ -18,6 +18,8 @@ if (env.TRUST_PROXY !== false) {
 }
 
 app.use(cors(corsOptions));
+// Explicit preflight so browsers always get ACAO even if a route only defines POST
+app.options("*", cors(corsOptions));
 app.use(
   helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },

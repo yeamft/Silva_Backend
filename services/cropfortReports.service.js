@@ -246,8 +246,8 @@ exports.releaseReport = async (user, id, body = {}) => {
   const programId = requireProgramId(user);
   const existing = await prisma.reports.findFirst({ where: { id, programId } });
   if (!existing) throw new AppError(404, "NOT_FOUND", "Report not found");
-  if (existing.status !== "submitted" && existing.status !== "draft") {
-    throw new AppError(400, "INVALID_STATUS", "Report cannot be released from this status");
+  if (existing.status !== "submitted") {
+    throw new AppError(400, "INVALID_STATUS", "Only submitted reports can be released to Silva");
   }
   const events = Array.isArray(existing.eventsJson) ? [...existing.eventsJson] : [];
   events.push({

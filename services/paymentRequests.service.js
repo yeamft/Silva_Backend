@@ -70,17 +70,23 @@ function assertAuthorize(user) {
 }
 
 function assertReadPayments(user) {
+  // Firewall: Silva never sees raw payment requests — settlements only.
+  if (isSilvaRole(user.role) || user.role === "farm_owner") {
+    throw new AppError(403, "FORBIDDEN", "Silva views settlements only — not raw payment requests");
+  }
   if (
     hasPerm(user, "payment_requests.create") ||
     hasPerm(user, "payment_requests.verify") ||
     hasPerm(user, "payment_requests.read_verified") ||
     isSpxRole(user.role) ||
-    isSilvaRole(user.role) ||
     user.role === "vendor" ||
     user.role === "vendor_ops" ||
-    user.role === "farm_owner" ||
     user.role === "system_admin"
   ) {
+    return;
+  }
+  const cf = user.cropfortRoles || [];
+  if (cf.includes("bagro_office") || cf.includes("field_supervisor") || cf.includes("spx_validator") || cf.includes("spx_platform_admin")) {
     return;
   }
   throw new AppError(403, "FORBIDDEN", "Insufficient permissions to view payment requests");

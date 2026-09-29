@@ -150,6 +150,20 @@ function serializeWo(row) {
     blockName: b.farm_blocks?.label || b.farm_blocks?.code || null,
   }));
   const primaryBlock = blocks[0];
+  const vendor = row.vendors;
+  const insuranceOnFile = Boolean(vendor?.insuranceOnFile);
+  const insuranceExpiry = vendor?.insuranceExpiry
+    ? vendor.insuranceExpiry.toISOString().slice(0, 10)
+    : null;
+  const insuranceExpired =
+    insuranceExpiry != null && insuranceExpiry < new Date().toISOString().slice(0, 10);
+  const insuranceGatePassed = !vendor
+    ? true
+    : insuranceOnFile && !insuranceExpired;
+  let attention = null;
+  if (vendor && !insuranceGatePassed && (row.status === "draft" || row.status === "issued")) {
+    attention = "insurance";
+  }
   return {
     id: row.id,
     programId: row.programId,
@@ -168,7 +182,11 @@ function serializeWo(row) {
     farmName: row.farm_estates?.name || null,
     instructions: row.instructions || "",
     assignedVendorId: row.assignedVendorId,
-    vendorName: row.vendors?.name || null,
+    vendorName: vendor?.name || null,
+    insuranceOnFile: vendor ? insuranceOnFile : null,
+    insuranceExpiry,
+    insuranceGatePassed,
+    attention,
     status: row.status === "closed" ? "complete" : row.status,
     statusRaw: row.status,
     blocks,
@@ -191,7 +209,14 @@ const woInclude = {
   work_order_block_assignments: {
     include: { farm_blocks: { select: { id: true, code: true, label: true } } },
   },
-  vendors: { select: { id: true, name: true } },
+  vendors: {
+    select: {
+      id: true,
+      name: true,
+      insuranceOnFile: true,
+      insuranceExpiry: true,
+    },
+  },
   farm_estates: { select: { id: true, name: true } },
 };
 
@@ -384,6 +409,39 @@ exports.updateWorkOrder = async (user, id, body) => {
   return serializeWo(updated);
 };
 
+async function assertSchedule4Insurance(wo) {
+  const vendorId = wo.assignedVendorId;
+  if (!vendorId) return;
+  const vendor =
+    wo.vendors && wo.vendors.id === vendorId
+      ? wo.vendors
+      : await prisma.vendors.findUnique({
+          where: { id: vendorId },
+          select: { id: true, name: true, insuranceOnFile: true, insuranceExpiry: true },
+        });
+  if (!vendor) {
+    throw new AppError(400, "VALIDATION_ERROR", "Assigned vendor not found for Schedule 4 check");
+  }
+  if (!vendor.insuranceOnFile) {
+    throw new AppError(
+      409,
+      "SCHEDULE4_INSURANCE",
+      `Schedule 4: ${vendor.name || "Vendor"} insurance is not on file — cannot issue work order`,
+    );
+  }
+  if (vendor.insuranceExpiry) {
+    const exp = vendor.insuranceExpiry.toISOString().slice(0, 10);
+    const today = new Date().toISOString().slice(0, 10);
+    if (exp < today) {
+      throw new AppError(
+        409,
+        "SCHEDULE4_INSURANCE",
+        `Schedule 4: ${vendor.name || "Vendor"} insurance expired on ${exp} — cannot issue work order`,
+      );
+    }
+  }
+}
+
 exports.transitionWorkOrder = async (user, id, { status }) => {
   assertWoWrite(user);
   const existing = await loadWo(user, id);
@@ -398,6 +456,9 @@ exports.transitionWorkOrder = async (user, id, { status }) => {
   }
   if (next === "issued" && !hasPerm(user, "work_orders.issue") && !hasPerm(user, "work_orders.full") && !isSpxRole(user.role) && user.role !== "system_admin" && user.role !== "spx_platform_admin") {
     throw new AppError(403, "FORBIDDEN", "Insufficient permissions to issue work orders");
+  }
+  if (next === "issued") {
+    await assertSchedule4Insurance(existing);
   }
 
   const updated = await prisma.work_orders.update({
@@ -433,6 +494,7 @@ exports.createFieldTicket = async (user, workOrderId, body) => {
     throw new AppError(409, "INVALID_STATE_TRANSITION", "Cannot record execution against a closed work order");
   }
   if (wo.status === "draft") {
+    await assertSchedule4Insurance(wo);
     await prisma.work_orders.update({
       where: { id: wo.id },
       data: { status: "issued", updatedAt: new Date() },

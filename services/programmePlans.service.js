@@ -376,6 +376,18 @@ exports.createPlan = async (user, body) => {
   const planningCycleLabel =
     String(body.planningCycleLabel || "").trim() || `${year} Programme`;
 
+  const existing = await prisma.cropfort_programme_plans.findFirst({
+    where: { programId, farmEstateId: farm.id, planYear: year },
+    select: { id: true, name: true, status: true },
+  });
+  if (existing) {
+    throw new AppError(
+      409,
+      "CONFLICT",
+      `A programme plan already exists for this farm and ${year} (${existing.name}). Open it instead of creating another.`,
+    );
+  }
+
   const plan = await prisma.cropfort_programme_plans.create({
     data: {
       id: uuid("pplan"),
