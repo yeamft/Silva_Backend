@@ -154,18 +154,15 @@ exports.me = async (user) => {
     include: { organization: true, activeProgram: true },
   });
   const programs = await programService.listPrograms(full);
-  return {
-    user: userJson(full),
-    tenant: {
-      id: full.organization.id,
-      name: full.organization.name,
-      slug: full.organization.slug,
-      displayName: full.organization.displayName || full.organization.name,
-      type: full.organization.type,
-      branding: full.organization.brandingJson || null,
-      status: full.organization.status,
-    },
-    activeProgram: full.activeProgram
+  const activeIsArchived = full.activeProgram?.status === "archived";
+  if (activeIsArchived && full.activeProgramId) {
+    await prisma.users.update({
+      where: { id: full.id },
+      data: { activeProgramId: null },
+    });
+  }
+  const activeProgram =
+    full.activeProgram && !activeIsArchived
       ? {
           id: full.activeProgram.id,
           name: full.activeProgram.name,
@@ -184,7 +181,22 @@ exports.me = async (user) => {
               ? Number(full.activeProgram.cropfortAfeBandCMaxEtb)
               : 5000000,
         }
-      : null,
+      : null;
+  return {
+    user: userJson({
+      ...full,
+      activeProgramId: activeProgram ? full.activeProgramId : null,
+    }),
+    tenant: {
+      id: full.organization.id,
+      name: full.organization.name,
+      slug: full.organization.slug,
+      displayName: full.organization.displayName || full.organization.name,
+      type: full.organization.type,
+      branding: full.organization.brandingJson || null,
+      status: full.organization.status,
+    },
+    activeProgram,
     programs,
     permissions: permissionsFor(full.role),
     onboardingComplete: Boolean(full.organization?.displayName),

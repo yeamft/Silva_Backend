@@ -87,9 +87,11 @@ async function ensureDefaultCategories(programId) {
   }
 }
 
+/** Workspace picker /me — never include archived programmes as selectable workspaces. */
 exports.listPrograms = async (user) => {
   if (user.role === "system_admin") {
     const rows = await prisma.programs.findMany({
+      where: { status: { not: "archived" } },
       orderBy: { name: "asc" },
       include: {
         memberships: {
@@ -102,7 +104,10 @@ exports.listPrograms = async (user) => {
   }
 
   const memberships = await prisma.program_memberships.findMany({
-    where: { organizationId: user.organizationId },
+    where: {
+      organizationId: user.organizationId,
+      program: { status: { not: "archived" } },
+    },
     include: { program: true },
     orderBy: { createdAt: "asc" },
   });
@@ -226,6 +231,11 @@ exports.archiveProgram = async (user, id) => {
     data: { status: "archived" },
     include: { _count: { select: { memberships: true, farm_estates: true } } },
   });
+  // Drop archived programme from anyone's active workspace.
+  await prisma.users.updateMany({
+    where: { activeProgramId: id },
+    data: { activeProgramId: null },
+  });
   return adminProgramJson(updated);
 };
 
@@ -233,6 +243,9 @@ exports.switchProgram = async (user, programId) => {
   if (user.role === "system_admin") {
     const program = await prisma.programs.findUnique({ where: { id: programId } });
     if (!program) throw new AppError(404, "NOT_FOUND", "Program not found");
+    if (program.status === "archived") {
+      throw new AppError(400, "PROGRAM_ARCHIVED", "Archived programmes cannot be opened as a workspace.");
+    }
     const existing = await prisma.program_memberships.findUnique({
       where: {
         programId_organizationId: { programId, organizationId: user.organizationId },
@@ -253,8 +266,12 @@ exports.switchProgram = async (user, programId) => {
   }
 
   await assertProgramMember(user, programId);
-  await prisma.users.update({ where: { id: user.id }, data: { activeProgramId: programId } });
   const program = await prisma.programs.findUnique({ where: { id: programId } });
+  if (!program) throw new AppError(404, "NOT_FOUND", "Program not found");
+  if (program.status === "archived") {
+    throw new AppError(400, "PROGRAM_ARCHIVED", "Archived programmes cannot be opened as a workspace.");
+  }
+  await prisma.users.update({ where: { id: user.id }, data: { activeProgramId: programId } });
   return programJson(program);
 };
 
