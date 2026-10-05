@@ -5,13 +5,16 @@
  *   node prisma/seedActivities.js
  *
  * Upsert keyed on id so re-runs sync corrections without duplicates.
+ * Falls back to prisma/activity-taxonomy-seed.json if the Excel file is missing.
  */
 
+require("dotenv").config();
 const path = require("path");
+const fs = require("fs");
 const ExcelJS = require("exceljs");
 const { PrismaClient } = require("@prisma/client");
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({ log: ["error", "warn"] });
 
 const DEFAULT_XLSX = path.join(
   __dirname,
@@ -40,9 +43,24 @@ function parseTier(raw) {
   return Number(m[1]);
 }
 
+async function loadActivitiesFromJson(jsonPath = path.join(__dirname, "activity-taxonomy-seed.json")) {
+  const raw = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
+  return raw.map((row, index) => ({
+    id: row.id,
+    code: row.code || row.id,
+    tier: Number(row.tier),
+    category: String(row.category || "").trim(),
+    name: String(row.name || "").trim(),
+    description: row.description ?? null,
+    unitOfMeasure: String(row.unitOfMeasure || "").trim(),
+    active: row.active !== false,
+    sortOrder: Number.isFinite(Number(row.sortOrder)) ? Number(row.sortOrder) : index + 1,
+  }));
+}
+
 /**
  * @param {string} [xlsxPath]
- * @returns {Promise<{ id: string; tier: number; category: string; name: string; unitOfMeasure: string }[]>}
+ * @returns {Promise<{ id: string; code: string; tier: number; category: string; name: string; description: string|null; unitOfMeasure: string; active: boolean; sortOrder: number }[]>}
  */
 async function loadActivitiesFromExcel(xlsxPath = DEFAULT_XLSX) {
   const wb = new ExcelJS.Workbook();
@@ -72,18 +90,51 @@ async function loadActivitiesFromExcel(xlsxPath = DEFAULT_XLSX) {
         })})`,
       );
     }
-    rows.push({ id, tier, category, name, unitOfMeasure });
+    rows.push({
+      id,
+      code: id,
+      tier,
+      category,
+      name,
+      description: null,
+      unitOfMeasure,
+      active: true,
+      sortOrder: rows.length + 1,
+    });
   });
 
   return rows;
-
 }
 
 async function seedActivities(client = prisma, xlsxPath = DEFAULT_XLSX) {
-  const ACTIVITY_ROWS = await loadActivitiesFromExcel(xlsxPath);
+  let ACTIVITY_ROWS = [];
+  if (fs.existsSync(xlsxPath)) {
+    try {
+      ACTIVITY_ROWS = await loadActivitiesFromExcel(xlsxPath);
+    } catch (err) {
+      console.warn(`[seedActivities] Excel load failed (${err.message}); falling back to JSON.`);
+    }
+  } else {
+    console.warn(`[seedActivities] Excel not found at ${xlsxPath}; using JSON seed.`);
+  }
   if (!ACTIVITY_ROWS.length) {
-    console.warn("[seedActivities] No activity rows found in Excel.");
+    ACTIVITY_ROWS = await loadActivitiesFromJson();
+  }
+  if (!ACTIVITY_ROWS.length) {
+    console.warn("[seedActivities] No activity rows found.");
     return { upserted: 0 };
+  }
+
+  // Warm the connection — Supabase session pool can reject the first attempt.
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    try {
+      await client.$connect();
+      break;
+    } catch (err) {
+      if (attempt === 5) throw err;
+      console.warn(`[seedActivities] connect attempt ${attempt} failed; retrying…`);
+      await new Promise((r) => setTimeout(r, 3000));
+    }
   }
 
   const byTier = { 1: 0, 2: 0, 3: 0 };
@@ -93,16 +144,24 @@ async function seedActivities(client = prisma, xlsxPath = DEFAULT_XLSX) {
       where: { id: row.id },
       create: {
         id: row.id,
+        code: row.code || row.id,
         tier: row.tier,
         category: row.category,
         name: row.name,
+        description: row.description ?? null,
         unitOfMeasure: row.unitOfMeasure,
+        active: row.active !== false,
+        sortOrder: row.sortOrder ?? upserted + 1,
       },
       update: {
+        code: row.code || row.id,
         tier: row.tier,
         category: row.category,
         name: row.name,
+        description: row.description ?? null,
         unitOfMeasure: row.unitOfMeasure,
+        active: row.active !== false,
+        sortOrder: row.sortOrder ?? upserted + 1,
       },
     });
     byTier[row.tier] += 1;

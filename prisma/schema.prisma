@@ -370,10 +370,14 @@ model activity_master {
 /// Platform-owned Cropfort activity taxonomy (Tier 1/2/3). Not farm- or program-scoped.
 model activities {
   id                  String               @id
+  code                String               @unique
   tier                Int
   category            String
   name                String
+  description         String?
   unitOfMeasure       String
+  active              Boolean              @default(true)
+  sortOrder           Int                  @default(0)
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
   benchmark_surveys              benchmark_surveys[]
@@ -386,6 +390,7 @@ model activities {
   @@index([tier])
   @@index([category])
   @@index([tier, category])
+  @@index([active])
 }
 
 model activity_requests {
