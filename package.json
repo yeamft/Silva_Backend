@@ -5,6 +5,7 @@
   "description": "SPX Farm OS — Express auth API",
   "main": "app.js",
   "scripts": {
+    "build": "prisma generate && prisma migrate deploy",
     "start": "node app.js",
     "dev": "nodemon app.js",
     "prisma:generate": "prisma generate",
