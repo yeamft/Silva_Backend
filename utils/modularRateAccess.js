@@ -22,6 +22,20 @@ function canEditModularRates(role) {
   return canCreateOrEditPlans(role);
 }
 
+/** Assessment-specific edit gate: SPX roles + field roles (field_supervisor, bagro_office). */
+function canEditAssessment(userOrRole) {
+  if (userOrRole == null) return false;
+  const role = typeof userOrRole === "string" ? userOrRole : userOrRole.role;
+  if (canCreateOrEditPlans(userOrRole)) return true;
+  const cf = typeof userOrRole === "object" ? (userOrRole.cropfortRoles || []) : [];
+  return (
+    role === "field_supervisor" ||
+    role === "bagro_office" ||
+    cf.includes("field_supervisor") ||
+    cf.includes("bagro_office")
+  );
+}
+
 function canDecideModularRates(role) {
   return isAssetOwnerApprover(role);
 }
@@ -35,14 +49,30 @@ function requireProgramId(user) {
 }
 
 function assertView(user) {
-  if (!canViewModularRates(user.role) && !(user.cropfortRoles || []).includes("farm_owner")) {
-    throw new AppError(403, "FORBIDDEN", "Insufficient permissions");
+  const role = String(user.role || "");
+  const cf = user.cropfortRoles || [];
+  if (
+    canViewModularRates(role) ||
+    cf.includes("farm_owner") ||
+    role === "field_supervisor" ||
+    role === "bagro_office" ||
+    cf.includes("field_supervisor") ||
+    cf.includes("bagro_office")
+  ) {
+    return;
   }
+  throw new AppError(403, "FORBIDDEN", "Insufficient permissions");
 }
 
 function assertEdit(user) {
   if (!canCreateOrEditPlans(user)) {
     throw new AppError(403, "FORBIDDEN", "Only SPX can create or edit plans");
+  }
+}
+
+function assertEditAssessment(user) {
+  if (!canEditAssessment(user)) {
+    throw new AppError(403, "FORBIDDEN", "Insufficient permissions to create or edit assessments");
   }
 }
 
@@ -55,9 +85,11 @@ function assertDecide(user) {
 module.exports = {
   canViewModularRates,
   canEditModularRates,
+  canEditAssessment,
   canDecideModularRates,
   requireProgramId,
   assertView,
   assertEdit,
+  assertEditAssessment,
   assertDecide,
 };

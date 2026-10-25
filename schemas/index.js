@@ -293,6 +293,7 @@ const programmePlanUpsert = z.object({
   programBandSetId: z.string().nullable().optional(),
   totalHa: z.number().finite().nonnegative().optional(),
   applicableBlockIds: z.array(z.string()).optional(),
+  annualPlanData: z.record(z.string(), z.unknown()).nullable().optional(),
   status: z.enum(["draft", "finalized", "ready_for_review", "submitted"]).optional(),
   lines: z.array(programmePlanLine).optional(),
   activities: z.record(z.string(), programmePlanLine).optional(),

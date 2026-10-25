@@ -49,7 +49,7 @@ function serialize(row) {
     budgetYear: row.budgetYear,
     blockId: row.blockId || null,
     activityId: row.activityId,
-    activityCode: row.activity?.id || null,
+    activityCode: row.activity?.code || null,
     activityName: row.activity?.name || null,
     activityUnit: row.activity?.unitOfMeasure || null,
     activityTier: row.activity?.tier ?? null,
@@ -80,7 +80,7 @@ function serialize(row) {
 }
 
 const includeActivity = {
-  activity: { select: { id: true, name: true, tier: true, unitOfMeasure: true, category: true } },
+  activity: { select: { id: true, code: true, name: true, tier: true, unitOfMeasure: true, category: true } },
   farm_estates: { select: { id: true, name: true } },
 };
 

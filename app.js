@@ -66,6 +66,8 @@ app.use("/api/v1/users", usersRoutes);
 app.use("/api/v1/org-map", orgMapRoutes);
 app.use("/api/v1/programs", require("./routes/programs.routes"));
 app.use("/api/v1/programme-plans", require("./routes/programmePlans.routes"));
+app.use("/api/v1/farm-assessments", require("./routes/farmAssessments.routes"));
+app.use("/api/v1/annual-plan-benchmarks", require("./routes/annualPlanBenchmarks.routes"));
 app.use("/api/v1/work-orders", require("./routes/workOrders.routes"));
 app.use("/api/v1/afes", require("./routes/cropfortAfes.routes"));
 app.use("/api/v1/weekly-plans", require("./routes/cropfortWeeklyPlans.routes"));

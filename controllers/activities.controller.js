@@ -21,6 +21,17 @@ exports.deactivateMany = catchAsync(async (req, res) => {
   res.json({ data: await activities.deactivateMany(req.body?.ids) });
 });
 
+exports.previewWorkbookImport = catchAsync(async (req, res) => {
+  if (!req.file?.buffer) {
+    return res.status(400).json({ error: { code: "INVALID_FILE", message: "Workbook file is required" } });
+  }
+  res.json({ data: await activities.previewWorkbookImport(req.file.buffer) });
+});
+
+exports.commitWorkbookImport = catchAsync(async (req, res) => {
+  res.status(201).json({ data: await activities.commitWorkbookImport(req.body?.activities) });
+});
+
 exports.get = catchAsync(async (req, res) => {
   res.json({ data: await activities.get(req.params.id) });
 });

@@ -2,6 +2,7 @@ const express = require("express");
 const authenticateJWT = require("../middleware/authenticateJWT");
 const requireRole = require("../middleware/requireRole");
 const c = require("../controllers/activities.controller");
+const uploadCatalog = require("../middleware/uploadCatalog");
 
 const router = express.Router();
 router.use(authenticateJWT);
@@ -15,6 +16,8 @@ const activityManagers = [
 
 router.get("/", c.list);
 router.post("/", requireRole(activityManagers), c.create);
+router.post("/import/preview", requireRole(activityManagers), uploadCatalog.single("file"), c.previewWorkbookImport);
+router.post("/import/commit", requireRole(activityManagers), c.commitWorkbookImport);
 router.patch("/bulk", requireRole(activityManagers), c.bulkUpdate);
 router.post("/bulk/deactivate", requireRole(activityManagers), c.deactivateMany);
 router.patch("/:id", requireRole(activityManagers), c.update);

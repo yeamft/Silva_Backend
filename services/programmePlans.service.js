@@ -187,7 +187,7 @@ function lineJson(line) {
             rateCardId: line.rateCardId || "",
             unitRateEtb: rate,
             costKind: line.rateSource || "labor",
-            normMdPerUnit: null,
+            normMdPerUnit: num(line.normMdPerUnit),
             approvedAt: null,
           }
         : null,
@@ -230,6 +230,7 @@ function planJson(plan) {
     status: mapStatusToFe(plan.status),
     statusRaw: plan.status,
     applicableBlockIds: plan.applicableBlockIds || [],
+    annualPlanData: plan.annualPlanData || null,
     activityIds,
     activities,
     promotions: promotionsFromPlan(plan),
@@ -492,6 +493,7 @@ exports.upsertPlan = async (user, planId, body) => {
   if (body.budgetYearLabel != null) meta.budgetYearLabel = String(body.budgetYearLabel);
   if (body.programBandSetId !== undefined) meta.programBandSetId = body.programBandSetId;
   if (body.totalHa != null) meta.totalHa = dec(body.totalHa, 2);
+  if (body.annualPlanData !== undefined) meta.annualPlanData = body.annualPlanData;
   if (Array.isArray(body.applicableBlockIds)) {
     const blocks = await prisma.farm_blocks.findMany({
       where: {
@@ -557,6 +559,12 @@ exports.upsertPlan = async (user, planId, body) => {
             included,
             plannedQty: dec(qty, 4),
             unitRateEtb: rate != null ? dec(rate, 4) : null,
+            normMdPerUnit:
+              raw.agreedRate?.normMdPerUnit != null
+                ? dec(raw.agreedRate.normMdPerUnit, 6)
+                : raw.normMdPerUnit != null
+                  ? dec(raw.normMdPerUnit, 6)
+                  : null,
             rateCardId: raw.agreedRate?.rateCardId || raw.rateCardId || null,
             rateSource: raw.agreedRate?.costKind || raw.rateSource || null,
             rateStatus: raw.rateStatus === "OVERRIDDEN" ? "OVERRIDDEN" : rateStatus,

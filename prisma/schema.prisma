@@ -168,6 +168,7 @@ model users {
   cropfort_interventions_created                                       cropfort_interventions[]        @relation("cropfort_interventions_createdBy")
   cropfort_plan_scenarios_created                                      cropfort_plan_scenarios[]       @relation("cropfort_plan_scenarios_createdBy")
   cropfort_user_roles                                                  cropfort_user_roles[]
+  farm_assessments_as_assessor                                         cropfort_farm_assessments[]     @relation("farm_assessment_assessor")
   farm_blocks                                                          farm_blocks[]
   farm_estates_farm_estates_approverUserIdTousers                      farm_estates[]                 @relation("farm_estates_approverUserIdTousers")
   farm_estates_farm_estates_fieldManagerUserIdTousers                  farm_estates[]                 @relation("farm_estates_fieldManagerUserIdTousers")
@@ -377,6 +378,9 @@ model activities {
   name                String
   nameAm              String?
   description         String?
+  defaultAnnualFrequency Decimal?            @db.Decimal(10, 2)
+  planningCategory    String?
+  planningNotes       String?
   unitOfMeasure       String
   active              Boolean              @default(true)
   sortOrder           Int                  @default(0)
@@ -388,6 +392,7 @@ model activities {
   service_rate_cards             service_rate_cards[]
   rate_card_proposals            rate_card_proposals[]
   cropfort_programme_plan_lines  cropfort_programme_plan_lines[]
+  annual_plan_benchmark_activities cropfort_annual_benchmark_activities[]
 
   @@index([tier])
   @@index([category])
@@ -675,6 +680,35 @@ model benchmark_surveys {
   @@index([programId, status])
 }
 
+model cropfort_annual_benchmark_sets {
+  id         String                              @id
+  version    String                              @unique
+  sourceFile String
+  importedAt DateTime                            @default(now())
+  activities cropfort_annual_benchmark_activities[]
+
+  @@index([importedAt])
+}
+
+model cropfort_annual_benchmark_activities {
+  id               String                         @id
+  benchmarkSetId   String
+  taxonomyActivityId String?
+  code             String
+  category         String
+  subgroup         String                         @default("")
+  activityName     String
+  unit             String
+  farms            Json
+  dataNotes        String                         @default("")
+  sourceRow        Int
+  benchmarkSet     cropfort_annual_benchmark_sets @relation(fields: [benchmarkSetId], references: [id], onDelete: Cascade)
+  taxonomyActivity activities?                    @relation(fields: [taxonomyActivityId], references: [id], onDelete: SetNull)
+
+  @@unique([benchmarkSetId, code])
+  @@index([taxonomyActivityId])
+}
+
 /// SPX draft → submit → Silva (farm_owner) approve/reject. On approve, promotes to standing labor/material/service cards.
 model rate_card_proposals {
   id                                                 String             @id
@@ -840,6 +874,7 @@ model cropfort_programme_plans {
   vendorLabel          String                              @default("")
   programBandSetId     String?
   applicableBlockIds   String[]                            @default([])
+  annualPlanData       Json?
   plannedCostEtb       Decimal                             @default(0) @db.Decimal(14, 2)
   resolvedBand         AfeBand?
   approvalRequirement  String?
@@ -868,20 +903,47 @@ model cropfort_programme_plans {
 }
 
 model cropfort_farm_assessments {
-  planId            String   @id
-  status            String   @default("draft")
-  findings          String   @default("")
+  id                String    @id @default(cuid())
+  /// Optional link to a Core Operations plan — null for standalone assessments.
+  planId            String?   @unique
+  farmEstateId      String?
+  programId         String?
+  /// Free-text planning cycle label preserved from legacy rows.
+  planningCycle     String?
+  /// Structured plan year (GC integer, e.g. 2026). Source of truth for filtering.
+  planYear          Int?
+  title             String    @default("")
+  assessmentDate    DateTime? @db.Date
+  /// Free-text assessor name (legacy). Prefer assessorUserId for new records.
+  assessorName      String?
+  assessorUserId    String?
+  assessmentPurpose String    @default("annual_baseline")
+  assessedAreaHa    Decimal?  @db.Decimal(10, 2)
+  cropStage         String?
+  generalCondition  String?
+  findings          String    @default("")
+  recommendedOps    Json      @default("[]")
+  blockIds          String[]  @default([])
   reportName        String?
   reportData        Bytes?
   reportSize        Int?
-  revision          Int      @default(1)
+  revision          Int       @default(1)
+  status            String    @default("draft")
+  returnedComment   String?
   submittedByUserId String?
   submittedAt       DateTime?
   reviewedAt        DateTime?
-  history           Json     @default("[]")
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
-  plan              cropfort_programme_plans @relation(fields: [planId], references: [id], onDelete: Cascade)
+  history           Json      @default("[]")
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  plan              cropfort_programme_plans? @relation(fields: [planId], references: [id], onDelete: SetNull)
+  farm_estate       farm_estates?             @relation(fields: [farmEstateId], references: [id], onDelete: SetNull)
+  assessor          users?                    @relation("farm_assessment_assessor", fields: [assessorUserId], references: [id], onDelete: SetNull)
+
+  @@index([farmEstateId])
+  @@index([programId])
+  @@index([planYear])
+  @@index([status])
 }
 
 model cropfort_programme_plan_lines {
@@ -896,6 +958,7 @@ model cropfort_programme_plan_lines {
   included          Boolean                    @default(false)
   plannedQty        Decimal                    @default(0) @db.Decimal(14, 4)
   unitRateEtb       Decimal?                   @db.Decimal(14, 4)
+  normMdPerUnit     Decimal?                   @db.Decimal(14, 6)
   rateCardId        String?
   rateSource        String?
   rateStatus        ProgrammeRateStatus        @default(MISSING)
@@ -1384,6 +1447,7 @@ model farm_estates {
   rate_card_lines                              rate_card_lines[]
   work_orders                                  work_orders[]
   work_plan_submissions                        work_plan_submissions[]
+  cropfort_farm_assessments                    cropfort_farm_assessments[]
 
   @@unique([programId, name])
   @@index([approverUserId])
