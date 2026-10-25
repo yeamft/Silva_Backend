@@ -373,7 +373,9 @@ model activities {
   code                String               @unique
   tier                Int
   category            String
+  subgroup            String               @default("")
   name                String
+  nameAm              String?
   description         String?
   unitOfMeasure       String
   active              Boolean              @default(true)
@@ -642,6 +644,7 @@ model benchmark_surveys {
   neighbor2Name                                  String?
   neighbor1Rate                                  Decimal?             @db.Decimal(14, 4)
   neighbor2Rate                                  Decimal?             @db.Decimal(14, 4)
+  benchmarkData                                  Json?
   lockedAt                                       DateTime?
   recommendedRate                                Decimal?             @db.Decimal(14, 4)
   proposedRate                                   Decimal?             @db.Decimal(14, 4)

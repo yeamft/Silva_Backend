@@ -14,6 +14,80 @@ const notifications = require("./notifications.service");
 
 const EDITABLE = new Set(["draft", "returned"]);
 const SURVEY_STATUSES = new Set(["draft", "submitted", "approved", "returned"]);
+function normalizeBenchmarkData(input) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    throw new AppError(400, "VALIDATION_ERROR", "benchmarkData is required");
+  }
+  const rawFarms = Array.isArray(input.farms)
+    ? input.farms
+    : Object.entries(input.farms || {}).map(([name, values]) => ({
+        name,
+        ...values,
+        includeInIndustryAverage: ["Telli", "Gawi", "Chetu"].includes(name),
+      }));
+  const seenFarmNames = new Set();
+  const farms = rawFarms.map((rawValues) => {
+    const values = rawValues && typeof rawValues === "object" ? rawValues : {};
+    const name = String(values?.name || "").trim();
+    if (!name) {
+      throw new AppError(400, "VALIDATION_ERROR", "Every source farm must have a name");
+    }
+    const normalizedName = name.toLocaleLowerCase();
+    if (seenFarmNames.has(normalizedName)) {
+      throw new AppError(400, "VALIDATION_ERROR", `Source farm ${name} is listed more than once`);
+    }
+    seenFarmNames.add(normalizedName);
+    const entry = { name, includeInIndustryAverage: Boolean(values.includeInIndustryAverage) };
+    for (const field of ["costPerUnit", "manDaysPerUnit", "frequency"]) {
+      const raw = values[field];
+      if (raw == null || raw === "") {
+        entry[field] = null;
+        continue;
+      }
+      const value = num(raw);
+      if (value == null || value < 0) {
+        throw new AppError(400, "VALIDATION_ERROR", `${name} ${field} must be a non-negative number`);
+      }
+      entry[field] = value;
+    }
+    return entry;
+  });
+
+  const average = (entries, field) => {
+    const values = entries.map((entry) => entry[field]).filter((value) => value != null);
+    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  };
+  const summarize = (entries) => {
+    const rated = entries.filter((entry) => entry.costPerUnit != null);
+    const costPerUnit = average(rated, "costPerUnit");
+    const manDaysPerUnit = average(rated, "manDaysPerUnit");
+    return {
+      farmsWithRate: rated.length,
+      costPerUnit,
+      manDaysPerUnit,
+      wagePerManDay:
+        costPerUnit != null && manDaysPerUnit != null && manDaysPerUnit > 0
+          ? costPerUnit / manDaysPerUnit
+          : null,
+      frequency: average(rated, "frequency"),
+    };
+  };
+  const industryAverage = summarize(farms.filter((farm) => farm.includeInIndustryAverage));
+  const sixFarmAverage = summarize(farms);
+  const recommendedSource = industryAverage.costPerUnit == null ? "six_farm_fallback" : "industry_average";
+  const recommendedRate = industryAverage.costPerUnit ?? sixFarmAverage.costPerUnit;
+  if (recommendedRate == null) {
+    throw new AppError(400, "VALIDATION_ERROR", "Enter a cost per unit for at least one farm");
+  }
+
+  return {
+    farms,
+    industryAverage,
+    sixFarmAverage,
+    recommendedSource,
+    dataNotes: String(input.dataNotes || "").trim(),
+  };
+}
 
 function avgRecommended(n1, n2) {
   const a = num(n1);
@@ -38,15 +112,17 @@ function serialize(row) {
     farmAreaId: row.farmEstateId,
     farmEstateName: row.farm_estates?.name || null,
     activityId: row.activityId,
-    activityCode: row.activity?.id || null,
+    activityCode: row.activity?.code || row.activity?.id || null,
     activityName: row.activity?.name || null,
     activityUnit: row.activity?.unitOfMeasure || null,
+    activitySubgroup: row.activity?.subgroup || "",
     activityTier: row.activity?.tier ?? null,
     kind: kindFromTier(row.activity?.tier),
     neighbor1Name: row.neighbor1Name || null,
     neighbor2Name: row.neighbor2Name || null,
     neighbor1Rate: num(row.neighbor1Rate),
     neighbor2Rate: num(row.neighbor2Rate),
+    benchmarkData: row.benchmarkData || null,
     lockedAt: row.lockedAt ? row.lockedAt.toISOString() : null,
     recommendedRate: num(row.recommendedRate),
     proposedRate: num(row.proposedRate),
@@ -66,7 +142,17 @@ function serialize(row) {
 }
 
 const includeActivity = {
-  activity: { select: { id: true, name: true, tier: true, unitOfMeasure: true, category: true } },
+  activity: {
+    select: {
+      id: true,
+      code: true,
+      name: true,
+      tier: true,
+      unitOfMeasure: true,
+      category: true,
+      subgroup: true,
+    },
+  },
   farm_estates: { select: { id: true, name: true } },
 };
 
@@ -156,18 +242,8 @@ exports.create = async (user, farmId, input) => {
   const activity = await prisma.activities.findFirst({ where: { id: activityId } });
   if (!activity) throw new AppError(404, "NOT_FOUND", "Activity not found");
 
-  const neighbor1Name = String(input.neighbor1Name || "").trim();
-  const neighbor2Name = String(input.neighbor2Name || "").trim();
-  const neighbor1Rate = num(input.neighbor1Rate);
-  const neighbor2Rate = num(input.neighbor2Rate);
-  if (!neighbor1Name || !neighbor2Name) {
-    throw new AppError(400, "VALIDATION_ERROR", "Neighbor names are required");
-  }
-  if (neighbor1Rate == null || neighbor2Rate == null || neighbor1Rate < 0 || neighbor2Rate < 0) {
-    throw new AppError(400, "VALIDATION_ERROR", "Neighbor rates must be non-negative numbers");
-  }
-
-  const recommended = avgRecommended(neighbor1Rate, neighbor2Rate);
+  const benchmarkData = normalizeBenchmarkData(input.benchmarkData);
+  const recommended = benchmarkData.industryAverage.costPerUnit ?? benchmarkData.sixFarmAverage.costPerUnit;
   const proposed =
     input.proposedRate != null && input.proposedRate !== ""
       ? num(input.proposedRate)
@@ -179,10 +255,11 @@ exports.create = async (user, farmId, input) => {
       programId: farm.programId,
       farmEstateId: farm.id,
       activityId,
-      neighbor1Name,
-      neighbor2Name,
-      neighbor1Rate,
-      neighbor2Rate,
+      neighbor1Name: null,
+      neighbor2Name: null,
+      neighbor1Rate: null,
+      neighbor2Rate: null,
+      benchmarkData,
       recommendedRate: recommended,
       proposedRate: proposed,
       sourceEvidence: String(input.sourceEvidence || "").trim() || null,
@@ -207,8 +284,19 @@ exports.update = async (user, id, input) => {
 
   const data = {};
   const locked = Boolean(row.lockedAt);
+  const prevRecommended = num(row.recommendedRate);
+  const prevProposed = num(row.proposedRate);
 
   if (!locked) {
+    if (input.benchmarkData !== undefined) {
+      const benchmarkData = normalizeBenchmarkData(input.benchmarkData);
+      data.benchmarkData = benchmarkData;
+      data.recommendedRate =
+        benchmarkData.industryAverage.costPerUnit ?? benchmarkData.sixFarmAverage.costPerUnit;
+      if (prevProposed == null || (prevRecommended != null && prevProposed === prevRecommended)) {
+        data.proposedRate = data.recommendedRate;
+      }
+    }
     if (input.neighbor1Name !== undefined) data.neighbor1Name = String(input.neighbor1Name || "").trim();
     if (input.neighbor2Name !== undefined) data.neighbor2Name = String(input.neighbor2Name || "").trim();
     if (input.neighbor1Rate !== undefined) {
@@ -232,9 +320,6 @@ exports.update = async (user, id, input) => {
 
   const nextN1 = data.neighbor1Rate !== undefined ? data.neighbor1Rate : num(row.neighbor1Rate);
   const nextN2 = data.neighbor2Rate !== undefined ? data.neighbor2Rate : num(row.neighbor2Rate);
-  const prevRecommended = num(row.recommendedRate);
-  const prevProposed = num(row.proposedRate);
-
   if (!locked && (data.neighbor1Rate !== undefined || data.neighbor2Rate !== undefined)) {
     const recommended = avgRecommended(nextN1, nextN2);
     data.recommendedRate = recommended;
@@ -292,7 +377,7 @@ exports.submit = async (user, id) => {
     throw new AppError(409, "INVALID_STATE", "Only draft or returned surveys can be submitted");
   }
   if (!row.lockedAt) {
-    throw new AppError(409, "NOT_LOCKED", "Lock neighbor rates before submitting");
+    throw new AppError(409, "NOT_LOCKED", "Lock benchmark data before submitting");
   }
   const updated = await prisma.benchmark_surveys.update({
     where: { id },

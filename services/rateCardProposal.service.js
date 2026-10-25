@@ -312,7 +312,11 @@ exports.createFromSurvey = async (user, farmId, input) => {
       proposedRate: proposed,
       norm: input.norm != null ? num(input.norm) : null,
       fallbackRate:
-        input.fallbackRate != null ? num(input.fallbackRate) : Math.round(proposed * 0.95 * 100) / 100,
+        input.fallbackRate != null
+          ? num(input.fallbackRate)
+          : survey.benchmarkData?.recommendedSource === "six_farm_fallback"
+            ? num(survey.benchmarkData?.sixFarmAverage?.costPerUnit)
+            : Math.round(proposed * 0.95 * 100) / 100,
       sourceBasis: String(input.sourceBasis || `Benchmark ${survey.id}`).trim(),
       availableFrom: input.availableFrom ? new Date(input.availableFrom) : day,
       availableTo: input.availableTo ? new Date(input.availableTo) : survey.validUntil,

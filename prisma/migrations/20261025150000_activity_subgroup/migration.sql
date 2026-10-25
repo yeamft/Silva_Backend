@@ -1,0 +1,1 @@
+ALTER TABLE "activities" ADD COLUMN IF NOT EXISTS "subgroup" TEXT NOT NULL DEFAULT '';
