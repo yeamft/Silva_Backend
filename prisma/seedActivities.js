@@ -4,6 +4,7 @@
  *
  *   node prisma/seedActivities.js
  *
+ * Keeps a small starter catalogue of four activities for the current workflow.
  * Upsert keyed on id so re-runs sync corrections without duplicates.
  * Falls back to prisma/activity-taxonomy-seed.json if the Excel file is missing.
  */
@@ -15,6 +16,12 @@ const ExcelJS = require("exceljs");
 const { PrismaClient } = require("@prisma/client");
 
 const prisma = new PrismaClient({ log: ["error", "warn"] });
+const STARTER_ACTIVITY_IDS = [
+  "T1-001", // Nursery — Land Clearing
+  "T1-023", // Matured Coffee — Manual Weeding
+  "T2-001", // Annual Harvest Management — Harvest Planning
+  "T3-027", // Technical and Laboratory Services — Soil Sampling and Analysis
+];
 
 const DEFAULT_XLSX = path.join(
   __dirname,
@@ -125,6 +132,15 @@ async function seedActivities(client = prisma, xlsxPath = DEFAULT_XLSX) {
     return { upserted: 0 };
   }
 
+  // Keep the initial end-user catalogue intentionally small. Existing activities
+  // are deactivated instead of deleted because plans and rate cards may reference them.
+  const rowsById = new Map(ACTIVITY_ROWS.map((row) => [row.id, row]));
+  ACTIVITY_ROWS = STARTER_ACTIVITY_IDS.map((id) => rowsById.get(id));
+  const missingIds = STARTER_ACTIVITY_IDS.filter((_, index) => !ACTIVITY_ROWS[index]);
+  if (missingIds.length) {
+    throw new Error(`[seedActivities] Starter activities missing from source: ${missingIds.join(", ")}`);
+  }
+
   // Warm the connection — Supabase session pool can reject the first attempt.
   for (let attempt = 1; attempt <= 5; attempt += 1) {
     try {
@@ -139,6 +155,7 @@ async function seedActivities(client = prisma, xlsxPath = DEFAULT_XLSX) {
 
   const byTier = { 1: 0, 2: 0, 3: 0 };
   let upserted = 0;
+  await client.activities.updateMany({ data: { active: false } });
   for (const row of ACTIVITY_ROWS) {
     await client.activities.upsert({
       where: { id: row.id },
@@ -150,7 +167,7 @@ async function seedActivities(client = prisma, xlsxPath = DEFAULT_XLSX) {
         name: row.name,
         description: row.description ?? null,
         unitOfMeasure: row.unitOfMeasure,
-        active: row.active !== false,
+        active: true,
         sortOrder: row.sortOrder ?? upserted + 1,
       },
       update: {
@@ -160,7 +177,7 @@ async function seedActivities(client = prisma, xlsxPath = DEFAULT_XLSX) {
         name: row.name,
         description: row.description ?? null,
         unitOfMeasure: row.unitOfMeasure,
-        active: row.active !== false,
+        active: true,
         sortOrder: row.sortOrder ?? upserted + 1,
       },
     });

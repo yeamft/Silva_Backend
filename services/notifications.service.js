@@ -59,6 +59,9 @@ function serialize(row) {
 }
 
 function hrefFor(row) {
+  if (row.entityType === "farm_assessment") {
+    return `/cropfort/planning/farm-assessments/${encodeURIComponent(row.entityId)}`;
+  }
   if (row.entityType === "rate_card_proposal") {
     return `/cropfort/rate-cards/proposals/${row.entityId}`;
   }
@@ -156,13 +159,13 @@ const CROPFORT_ROLE_ENUM = new Set([
   "spx_platform_admin",
 ]);
 
-async function findUsersByRoles(programId, roles) {
+async function findUsersByRoles(programId, roles, db = prisma) {
   const roleList = [...new Set((roles || []).filter(Boolean))];
   if (!roleList.length) return [];
   const cropfortRoles = roleList.filter((r) => CROPFORT_ROLE_ENUM.has(r));
 
   const [byGlobalRole, byCropfortRole] = await Promise.all([
-    prisma.users.findMany({
+    db.users.findMany({
       where: {
         active: true,
         accountStatus: { not: "suspended" },
@@ -175,7 +178,7 @@ async function findUsersByRoles(programId, roles) {
       select: { id: true, role: true },
     }),
     cropfortRoles.length
-      ? prisma.cropfort_user_roles.findMany({
+      ? db.cropfort_user_roles.findMany({
           where: { programId, role: { in: cropfortRoles } },
           select: {
             role: true,
@@ -207,12 +210,12 @@ async function findVendorUsers(vendorId) {
   });
 }
 
-async function findAssetOwnerRecipients(programId) {
+async function findAssetOwnerRecipients(programId, db = prisma) {
   const silvaRoles = ["silva_owner", "silva_country_manager", "silva_finance"];
   const cropfortOwnerRoles = ["farm_owner", "farm_owner_viewer"];
 
   const [byActiveProgram, byCropfortRole, estateOwnerOrgs, assetOwners] = await Promise.all([
-    prisma.users.findMany({
+    db.users.findMany({
       where: {
         active: true,
         accountStatus: { not: "suspended" },
@@ -221,18 +224,18 @@ async function findAssetOwnerRecipients(programId) {
       },
       select: { id: true, role: true, email: true },
     }),
-    prisma.cropfort_user_roles.findMany({
+    db.cropfort_user_roles.findMany({
       where: { programId, role: { in: cropfortOwnerRoles } },
       select: {
         userId: true,
         users: { select: { id: true, role: true, active: true, accountStatus: true, email: true } },
       },
     }),
-    prisma.farm_estates.findMany({
+    db.farm_estates.findMany({
       where: { programId, status: "active", ownerOrganizationId: { not: null } },
       select: { ownerOrganizationId: true },
     }),
-    prisma.asset_owners.findMany({
+    db.asset_owners.findMany({
       where: {
         contactEmail: { not: null },
         farm_estate_asset_owners: { some: { farm_estates: { programId } } },
@@ -254,7 +257,7 @@ async function findAssetOwnerRecipients(programId) {
 
   const [byOwnerOrg, byAssetEmail] = await Promise.all([
     ownerOrgIds.length
-      ? prisma.users.findMany({
+      ? db.users.findMany({
           where: {
             active: true,
             accountStatus: { not: "suspended" },
@@ -268,7 +271,7 @@ async function findAssetOwnerRecipients(programId) {
         })
       : Promise.resolve([]),
     ownerEmails.length
-      ? prisma.users.findMany({
+      ? db.users.findMany({
           where: {
             active: true,
             accountStatus: { not: "suspended" },
@@ -706,7 +709,36 @@ async function notifyProgrammePlanDecision(programId, plan, decision, actorName)
   });
 }
 
+// Assessment state and its notifications commit together.
+async function notifyFarmAssessment(plan, assessment, action, actorName, db = prisma) {
+  const submitted = action === "submitted";
+  let recipients;
+  if (submitted) {
+    recipients = [
+      ...await findUsersByRoles(plan.programId, APPROVER_ROLES, db),
+      ...await findAssetOwnerRecipients(plan.programId, db),
+    ];
+    recipients = [...new Map(recipients.map((r) => [r.id, r])).values()];
+    if (!recipients.length) recipients = APPROVER_ROLES.map((role) => ({ role }));
+  } else {
+    const author = await db.users.findUnique({ where: { id: assessment.submittedByUserId }, select: { id: true, role: true } });
+    recipients = author ? [author] : [];
+  }
+  if (!recipients.length) return;
+  const label = plan.name || plan.id;
+  const message = submitted
+    ? `Farm assessment for “${label}” is awaiting your review`
+    : `${actorName || "Asset owner"} ${action === "approved" ? "approved the farm assessment" : "requested changes to the farm assessment"} for “${label}”`;
+  await db.notifications.createMany({ data: recipients.map((r) => ({
+    id: uuid("ntf"), programId: plan.programId, triggerType: `farm_assessment.${action}`,
+    entityType: "farm_assessment", entityId: plan.id,
+    recipientUserId: r.id || null, recipientRole: r.role, message,
+    sentAt: new Date(), acknowledged: false,
+  })) });
+}
+
 module.exports = {
+  notifyFarmAssessment,
   listForUser,
   acknowledge,
   acknowledgeAll,

@@ -18,7 +18,7 @@ function serialize(row) {
  * @param {{ tier?: string|number, category?: string, q?: string }} query
  */
 exports.list = async (query = {}) => {
-  const where = {};
+  const where = { active: true };
   if (query.tier != null && query.tier !== "") {
     const tier = Number(query.tier);
     if (![1, 2, 3].includes(tier)) {
