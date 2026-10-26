@@ -339,10 +339,12 @@ async function listFarmAreas(user) {
   return rows.map(serializeFarmArea);
 }
 
-async function syncFarmAreaLinks(programId, estateId, { blockIds = [], vendorIds = [], assetOwnerIds = [] }) {
-  if (Array.isArray(blockIds)) {
+async function syncFarmAreaLinks(db, programId, estateId, { blocks, blockIds = [], vendorIds = [], assetOwnerIds = [] }) {
+  if (Array.isArray(blocks)) {
+    await syncFarmAreaBlocks(db, programId, estateId, blocks);
+  } else if (Array.isArray(blockIds)) {
     if (blockIds.length) {
-      const blocks = await prisma.farm_blocks.findMany({
+      const blocks = await db.farm_blocks.findMany({
         where: { id: { in: blockIds }, programId },
         select: { id: true },
       });
@@ -350,12 +352,12 @@ async function syncFarmAreaLinks(programId, estateId, { blockIds = [], vendorIds
         throw new AppError(400, "VALIDATION_ERROR", "One or more blocks are outside the active programme");
       }
     }
-    await prisma.farm_blocks.updateMany({
+    await db.farm_blocks.updateMany({
       where: { farmEstateId: estateId, programId, id: { notIn: blockIds } },
       data: { farmEstateId: null, updatedAt: new Date() },
     });
     if (blockIds.length) {
-      await prisma.farm_blocks.updateMany({
+      await db.farm_blocks.updateMany({
         where: { id: { in: blockIds }, programId },
         data: { farmEstateId: estateId, updatedAt: new Date() },
       });
@@ -363,7 +365,7 @@ async function syncFarmAreaLinks(programId, estateId, { blockIds = [], vendorIds
   }
 
   if (Array.isArray(vendorIds) && vendorIds.length) {
-    const vendors = await prisma.vendors.findMany({
+    const vendors = await db.vendors.findMany({
       where: { id: { in: vendorIds } },
       select: { id: true },
     });
@@ -372,9 +374,9 @@ async function syncFarmAreaLinks(programId, estateId, { blockIds = [], vendorIds
     }
   }
 
-  await prisma.farm_estate_vendors.deleteMany({ where: { farmEstateId: estateId } });
+  await db.farm_estate_vendors.deleteMany({ where: { farmEstateId: estateId } });
   if (vendorIds.length) {
-    await prisma.farm_estate_vendors.createMany({
+    await db.farm_estate_vendors.createMany({
       data: vendorIds.map((vendorId) => ({
         id: uuid("fev"),
         farmEstateId: estateId,
@@ -386,7 +388,7 @@ async function syncFarmAreaLinks(programId, estateId, { blockIds = [], vendorIds
   }
 
   if (Array.isArray(assetOwnerIds) && assetOwnerIds.length) {
-    const owners = await prisma.asset_owners.findMany({
+    const owners = await db.asset_owners.findMany({
       where: { id: { in: assetOwnerIds } },
       select: { id: true },
     });
@@ -395,9 +397,9 @@ async function syncFarmAreaLinks(programId, estateId, { blockIds = [], vendorIds
     }
   }
 
-  await prisma.farm_estate_asset_owners.deleteMany({ where: { farmEstateId: estateId } });
+  await db.farm_estate_asset_owners.deleteMany({ where: { farmEstateId: estateId } });
   if (assetOwnerIds.length) {
-    await prisma.farm_estate_asset_owners.createMany({
+    await db.farm_estate_asset_owners.createMany({
       data: assetOwnerIds.map((assetOwnerId) => ({
         id: uuid("feo"),
         farmEstateId: estateId,
@@ -408,27 +410,105 @@ async function syncFarmAreaLinks(programId, estateId, { blockIds = [], vendorIds
   }
 }
 
+/**
+ * Inline block editing from the farm area form: rows with an id are updated and kept, rows
+ * without one are created, and blocks dropped from the list are unassigned (not deleted —
+ * work orders and tickets may still reference them).
+ */
+async function syncFarmAreaBlocks(db, programId, estateId, blocks) {
+  const rows = blocks.map((b) => ({
+    id: b.id || null,
+    code: String(b.code || "").trim().toUpperCase(),
+    label: String(b.name || b.label || "").trim(),
+    areaHa: num(b.hectares ?? b.areaHa),
+  }));
+  if (rows.some((r) => !r.code)) throw new AppError(400, "VALIDATION_ERROR", "Every block needs a code");
+  if (new Set(rows.map((r) => r.code)).size !== rows.length) {
+    throw new AppError(400, "VALIDATION_ERROR", "Block codes must be unique within a farm area");
+  }
+
+  const keepIds = rows.filter((r) => r.id).map((r) => r.id);
+  if (keepIds.length) {
+    const found = await db.farm_blocks.findMany({
+      where: { id: { in: keepIds }, programId },
+      select: { id: true },
+    });
+    if (found.length !== keepIds.length) {
+      throw new AppError(400, "VALIDATION_ERROR", "One or more blocks are outside the active programme");
+    }
+  }
+
+  const now = new Date();
+  await db.farm_blocks.updateMany({
+    where: { farmEstateId: estateId, programId, id: { notIn: keepIds } },
+    data: { farmEstateId: null, updatedAt: now },
+  });
+
+  for (const row of rows) {
+    const data = {
+      code: row.code,
+      label: row.label || row.code,
+      areaHa: row.areaHa,
+      farmEstateId: estateId,
+      updatedAt: now,
+    };
+    if (row.id) {
+      await db.farm_blocks.update({ where: { id: row.id }, data });
+    } else {
+      await db.farm_blocks.create({
+        data: { ...data, id: uuid("blk"), programId, status: "active" },
+      });
+    }
+  }
+}
+
+/** Farm areas belong to the programme's estate owner (Silva) unless one is chosen explicitly. */
+async function resolveEstateOwnerOrgId(db, programId) {
+  const memberships = await db.program_memberships.findMany({
+    where: { programId, organization: { type: "silva" } },
+    orderBy: { createdAt: "asc" },
+    select: { organizationId: true },
+    take: 1,
+  });
+  if (memberships[0]) return memberships[0].organizationId;
+
+  const estate = await db.farm_estates.findFirst({
+    where: { programId, ownerOrganizationId: { not: null } },
+    orderBy: { createdAt: "asc" },
+    select: { ownerOrganizationId: true },
+  });
+  if (estate) return estate.ownerOrganizationId;
+
+  throw new AppError(
+    400,
+    "VALIDATION_ERROR",
+    "No estate owner organization is linked to this program yet.",
+  );
+}
+
 async function createFarmArea(user, input) {
   assertManage(user);
   const programId = requireProgramId(user);
   const name = String(input.name || "").trim();
   if (!name) throw new AppError(400, "VALIDATION_ERROR", "Name is required");
-  if (!input.organizationId) throw new AppError(400, "VALIDATION_ERROR", "A farm area must belong to an organization");
 
-  const created = await prisma.farm_estates.create({
-    data: {
-      id: uuid("fe"),
-      programId,
-      name,
-      ownerOrganizationId: input.organizationId,
-      totalAreaHa: num(input.totalHectares),
-      status: input.status === "inactive" ? "inactive" : "active",
-      updatedAt: new Date(),
-    },
+  const id = await prisma.$transaction(async (tx) => {
+    const created = await tx.farm_estates.create({
+      data: {
+        id: uuid("fe"),
+        programId,
+        name,
+        ownerOrganizationId: input.organizationId || (await resolveEstateOwnerOrgId(tx, programId)),
+        totalAreaHa: num(input.totalHectares),
+        status: input.status === "inactive" ? "inactive" : "active",
+        updatedAt: new Date(),
+      },
+    });
+    await syncFarmAreaLinks(tx, programId, created.id, input);
+    return created.id;
   });
 
-  await syncFarmAreaLinks(programId, created.id, input);
-  const full = await prisma.farm_estates.findUnique({ where: { id: created.id }, include: farmAreaInclude });
+  const full = await prisma.farm_estates.findUnique({ where: { id }, include: farmAreaInclude });
   return serializeFarmArea(full);
 }
 
@@ -439,19 +519,24 @@ async function updateFarmArea(user, id, input) {
   if (!existing) throw new AppError(404, "NOT_FOUND", "Farm area not found");
   const name = String(input.name || "").trim();
   if (!name) throw new AppError(400, "VALIDATION_ERROR", "Name is required");
-  if (!input.organizationId) throw new AppError(400, "VALIDATION_ERROR", "A farm area must belong to an organization");
 
-  await prisma.farm_estates.update({
-    where: { id },
-    data: {
-      name,
-      ownerOrganizationId: input.organizationId,
-      totalAreaHa: num(input.totalHectares),
-      status: input.status === "inactive" ? "inactive" : "active",
-      updatedAt: new Date(),
-    },
+  await prisma.$transaction(async (tx) => {
+    await tx.farm_estates.update({
+      where: { id },
+      data: {
+        name,
+        ownerOrganizationId:
+          input.organizationId ||
+          existing.ownerOrganizationId ||
+          (await resolveEstateOwnerOrgId(tx, programId)),
+        totalAreaHa: num(input.totalHectares),
+        status: input.status === "inactive" ? "inactive" : "active",
+        updatedAt: new Date(),
+      },
+    });
+    await syncFarmAreaLinks(tx, programId, id, input);
   });
-  await syncFarmAreaLinks(programId, id, input);
+
   const full = await prisma.farm_estates.findUnique({ where: { id }, include: farmAreaInclude });
   return serializeFarmArea(full);
 }

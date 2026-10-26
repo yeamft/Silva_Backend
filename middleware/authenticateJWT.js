@@ -2,6 +2,7 @@ const jwt = require("jsonwebtoken");
 const env = require("../config/env");
 const prisma = require("../config/database");
 const AppError = require("../utils/AppError");
+const authContextCache = require("../utils/authContextCache");
 const { hydrateUserContext } = require("../services/userContext.service");
 
 module.exports = async (req, res, next) => {
@@ -29,6 +30,14 @@ module.exports = async (req, res, next) => {
       return next(new AppError(401, "UNAUTHENTICATED", "Invalid or expired token"));
     }
 
+    const cacheKey = `${userId}:${decoded.sessionId || ""}`;
+    const cached = authContextCache.get(cacheKey);
+    if (cached) {
+      req.user = { ...cached };
+      return next();
+    }
+
+    let sessionExpiresAt = null;
     if (decoded.sessionId) {
       const session = await prisma.refresh_sessions.findFirst({
         where: {
@@ -37,7 +46,7 @@ module.exports = async (req, res, next) => {
           revoked: false,
           expiresAt: { gt: new Date() },
         },
-        select: { id: true, otpVerifiedAt: true },
+        select: { id: true, otpVerifiedAt: true, expiresAt: true },
       });
       if (!session) {
         return next(new AppError(401, "UNAUTHENTICATED", "Session revoked or expired"));
@@ -45,10 +54,11 @@ module.exports = async (req, res, next) => {
       if (env.OTP_ON_LOGIN && !session.otpVerifiedAt) {
         return next(new AppError(401, "UNAUTHENTICATED", "MFA verification required"));
       }
+      sessionExpiresAt = session.expiresAt;
     }
 
     const user = await prisma.users.findUnique({
-      where: { id: userId },  
+      where: { id: userId },
       include: { organization: true },
     });
     if (!user || !user.active) {
@@ -73,6 +83,8 @@ module.exports = async (req, res, next) => {
       tenantOrgId: user.organizationId,
       sessionId: decoded.sessionId || null,
     };
+    authContextCache.set(cacheKey, req.user, sessionExpiresAt);
+    req.user = { ...req.user };
     next();
   } catch (err) {
     next(err);

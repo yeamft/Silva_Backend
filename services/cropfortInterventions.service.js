@@ -1,6 +1,7 @@
 const AppError = require("../utils/AppError");
 const prisma = require("../config/database");
 const { uuid } = require("../utils/ids");
+const { nextCodeNumber } = require("../utils/codeSequence");
 const { permissionsFor, isSpxRole, isAssetOwnerApprover } = require("../utils/roles");
 const { Prisma } = require("@prisma/client");
 
@@ -146,10 +147,9 @@ exports.createIntervention = async (user, body) => {
   if (!program) throw new AppError(404, "NOT_FOUND", "Programme not found");
   const band = body.band || resolveBand(program, costEtb);
 
-  const n = (await prisma.cropfort_interventions.count({ where: { programId } })) + 1;
   const code =
     String(body.code || "").trim() ||
-    `INT-${String(n).padStart(2, "0")}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
+    `INT-${String(await nextCodeNumber(prisma.cropfort_interventions, { programId, prefix: "INT-" })).padStart(2, "0")}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
 
   const existing = await prisma.cropfort_interventions.findFirst({ where: { programId, code } });
   if (existing) throw new AppError(409, "ALREADY_EXISTS", `Code ${code} already exists`);

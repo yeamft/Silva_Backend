@@ -1,6 +1,7 @@
 const AppError = require("../utils/AppError");
 const prisma = require("../config/database");
 const { uuid } = require("../utils/ids");
+const { nextCodeNumber, isUniqueViolation } = require("../utils/codeSequence");
 const { permissionsFor, isSpxRole, isAssetOwnerApprover } = require("../utils/roles");
 const { Prisma } = require("@prisma/client");
 
@@ -104,6 +105,12 @@ exports.getReport = async (user, id) => {
   return serialize(row);
 };
 
+const REPORT_CODE_SERIES = {
+  monthly: { prefix: "MR-", floor: 2600 },
+  six_month: { prefix: "SMR-", floor: 100 },
+  annual: { prefix: "AR-", floor: 2026 },
+};
+
 exports.createReport = async (user, body) => {
   if (!canDraft(user)) throw new AppError(403, "FORBIDDEN", "Cannot draft reports");
   const programId = requireProgramId(user);
@@ -114,13 +121,7 @@ exports.createReport = async (user, body) => {
   const periodLabel = String(body.periodLabel || "").trim();
   if (!periodLabel) throw new AppError(400, "VALIDATION_ERROR", "periodLabel is required");
 
-  const n = (await prisma.reports.count({ where: { programId } })) + 1;
-  const code =
-    cadence === "monthly"
-      ? `MR-${2600 + n}`
-      : cadence === "six_month"
-        ? `SMR-${100 + n}`
-        : `AR-${2026 + (n % 10)}`;
+  const series = REPORT_CODE_SERIES[cadence];
 
   const now = new Date();
   const events = [
@@ -132,36 +133,46 @@ exports.createReport = async (user, body) => {
     },
   ];
 
-  const row = await prisma.reports.create({
-    data: {
-      id: uuid("rpt"),
-      programId,
-      code,
-      title: String(body.title || "").trim() || `${cadence} report — ${periodLabel}`,
-      cadence,
-      periodLabel,
-      status: "draft",
-      farmName: String(body.farmName || "").trim(),
-      programName: String(body.programName || "").trim(),
-      authorName: String(body.authorName || user.name || "").trim(),
-      summary: String(body.summary || ""),
-      highlights: String(body.highlights || ""),
-      risks: String(body.risks || ""),
-      recommendations: String(body.recommendations || ""),
-      outlook: String(body.outlook || ""),
-      planEtb: new Prisma.Decimal(num(body.planEtb).toFixed(2)),
-      actualEtb: new Prisma.Decimal(num(body.actualEtb).toFixed(2)),
-      variancePct: new Prisma.Decimal(num(body.variancePct).toFixed(2)),
-      metricsJson: body.metrics || {},
-      activityLinesJson: body.activityLines || [],
-      blockLinesJson: body.blockLines || [],
-      attentionItemsJson: body.attentionItems || [],
-      missAttributionsJson: body.missAttributions || [],
-      eventsJson: events,
-      createdByUserId: user.id,
-      updatedAt: now,
-    },
-  });
+  // Retry covers two drafts racing for the same next number; (programId, code) is unique
+  let row;
+  for (let attempt = 1; ; attempt += 1) {
+    const code = `${series.prefix}${await nextCodeNumber(prisma.reports, { programId, ...series })}`;
+    try {
+      row = await prisma.reports.create({
+        data: {
+          id: uuid("rpt"),
+          programId,
+          code,
+          title: String(body.title || "").trim() || `${cadence} report — ${periodLabel}`,
+          cadence,
+          periodLabel,
+          status: "draft",
+          farmName: String(body.farmName || "").trim(),
+          programName: String(body.programName || "").trim(),
+          authorName: String(body.authorName || user.name || "").trim(),
+          summary: String(body.summary || ""),
+          highlights: String(body.highlights || ""),
+          risks: String(body.risks || ""),
+          recommendations: String(body.recommendations || ""),
+          outlook: String(body.outlook || ""),
+          planEtb: new Prisma.Decimal(num(body.planEtb).toFixed(2)),
+          actualEtb: new Prisma.Decimal(num(body.actualEtb).toFixed(2)),
+          variancePct: new Prisma.Decimal(num(body.variancePct).toFixed(2)),
+          metricsJson: body.metrics || {},
+          activityLinesJson: body.activityLines || [],
+          blockLinesJson: body.blockLines || [],
+          attentionItemsJson: body.attentionItems || [],
+          missAttributionsJson: body.missAttributions || [],
+          eventsJson: events,
+          createdByUserId: user.id,
+          updatedAt: now,
+        },
+      });
+      break;
+    } catch (err) {
+      if (!isUniqueViolation(err) || attempt >= 3) throw err;
+    }
+  }
   return serialize(row);
 };
 

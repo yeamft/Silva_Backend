@@ -25,3 +25,4 @@ test("rejects invalid configured limits", () => {
     /PRISMA_CONNECTION_LIMIT must be a positive integer/,
   );
 });
+

@@ -2,20 +2,55 @@ require("dotenv").config();
 
 const { PrismaClient } = require("@prisma/client");
 const { withPrismaConnectionLimit } = require("./prisma-connection-url");
+const authContextCache = require("../utils/authContextCache");
 
 /** Reuse one client across nodemon reloads when possible. */
 const globalForPrisma = globalThis;
 
-const prisma =
-  globalForPrisma.__spxPrisma ||
-  new PrismaClient({
+/** Tables authenticateJWT builds req.user from — writes to them invalidate the auth cache. */
+const AUTH_CONTEXT_MODELS = new Set([
+  "users",
+  "refresh_sessions",
+  "organizations",
+  "cropfort_user_roles",
+  "program_memberships",
+]);
+const WRITE_OPERATIONS = new Set([
+  "create",
+  "createMany",
+  "createManyAndReturn",
+  "update",
+  "updateMany",
+  "updateManyAndReturn",
+  "upsert",
+  "delete",
+  "deleteMany",
+]);
+
+function createClient() {
+  return new PrismaClient({
     datasources: {
       db: {
         url: withPrismaConnectionLimit(process.env.DATABASE_URL),
       },
     },
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
+  }).$extends({
+    query: {
+      $allModels: {
+        async $allOperations({ model, operation, args, query }) {
+          const result = await query(args);
+          if (AUTH_CONTEXT_MODELS.has(model) && WRITE_OPERATIONS.has(operation)) {
+            authContextCache.clear();
+          }
+          return result;
+        },
+      },
+    },
   });
+}
+
+const prisma = globalForPrisma.__spxPrisma || createClient();
 
 if (process.env.NODE_ENV !== "production") {
   globalForPrisma.__spxPrisma = prisma;

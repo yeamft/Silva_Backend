@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
+const compression = require("compression");
 const requestId = require("./middleware/requestId");
 const errorHandler = require("./middleware/errorHandler");
 const prisma = require("./config/database");
@@ -25,6 +26,7 @@ app.use(
     crossOriginResourcePolicy: { policy: "cross-origin" },
   }),
 );
+app.use(compression());
 app.use(express.json({ limit: "2mb" }));
 app.use(requestId);
 

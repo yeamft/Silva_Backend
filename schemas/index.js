@@ -114,9 +114,20 @@ const orgMapOrganization = z.object({
 
 const orgMapFarmArea = z.object({
   name: z.string().min(1),
-  organizationId: z.string().min(1),
+  organizationId: z.string().min(1).optional(),
   totalHectares: z.union([z.number(), z.string()]).optional(),
   status: z.enum(["active", "inactive"]),
+  // Inline block rows from the farm area form; when present they replace blockIds
+  blocks: z
+    .array(
+      z.object({
+        id: z.string().min(1).optional(),
+        code: z.string().min(1),
+        name: z.string().optional(),
+        hectares: z.union([z.number(), z.string(), z.null()]).optional(),
+      }),
+    )
+    .optional(),
   blockIds: z.array(z.string()).optional().default([]),
   vendorIds: z.array(z.string()).optional().default([]),
   assetOwnerIds: z.array(z.string()).optional().default([]),

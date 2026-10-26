@@ -58,6 +58,7 @@ function pickPrimaryBackendRole(roles) {
     "farm_owner",
     "bagro_office",
     "field_supervisor",
+    "farm_owner_viewer",
   ];
   for (const r of order) {
     if (roles.includes(r)) return PRIMARY_BACKEND_ROLE[r];
