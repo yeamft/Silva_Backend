@@ -1,6 +1,7 @@
 require("dotenv").config();
 
 const { PrismaClient } = require("@prisma/client");
+const { withPrismaConnectionLimit } = require("./prisma-connection-url");
 
 /** Reuse one client across nodemon reloads when possible. */
 const globalForPrisma = globalThis;
@@ -8,6 +9,11 @@ const globalForPrisma = globalThis;
 const prisma =
   globalForPrisma.__spxPrisma ||
   new PrismaClient({
+    datasources: {
+      db: {
+        url: withPrismaConnectionLimit(process.env.DATABASE_URL),
+      },
+    },
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
   });
 

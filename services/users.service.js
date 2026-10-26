@@ -10,6 +10,7 @@ const CROPFORT_ROLES = [
   "bagro_office",
   "spx_validator",
   "farm_owner",
+  "farm_owner_viewer",
   "spx_platform_admin",
 ];
 
@@ -24,6 +25,7 @@ const PRIMARY_BACKEND_ROLE = {
   bagro_office: "vendor_manager",
   spx_validator: "spx_principal",
   farm_owner: "silva_owner",
+  farm_owner_viewer: "farm_owner_viewer",
   spx_platform_admin: "system_admin",
 };
 
@@ -43,6 +45,7 @@ function orgKindFromType(type) {
 
 function mapLegacyToCropfort(role) {
   if (role === "system_admin") return "spx_platform_admin";
+  if (role === "farm_owner_viewer") return "farm_owner_viewer";
   if (String(role).startsWith("silva_")) return "farm_owner";
   if (String(role).startsWith("vendor_")) return "field_supervisor";
   return "spx_validator";

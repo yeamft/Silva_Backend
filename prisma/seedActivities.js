@@ -3,9 +3,8 @@
  *
  *   node prisma/seedActivities.js
  *
- * Upserts all activities from activity-taxonomy-seed.json.
- * Activities already used in approved plans or rate cards are never deleted —
- * they are deactivated via the active flag instead.
+ * Upserts all activities from activity-taxonomy-seed.json without changing
+ * activity records that are not included in the seed.
  */
 
 require("dotenv").config();
@@ -52,13 +51,6 @@ async function seedActivities(client = prisma) {
       await new Promise((r) => setTimeout(r, 3000));
     }
   }
-
-  // Deactivate any activities not in the current seed (safe — preserves FK refs).
-  const seedIds = rows.map((r) => r.id);
-  await client.activities.updateMany({
-    where: { id: { notIn: seedIds } },
-    data: { active: false },
-  });
 
   const byTier = { 1: 0, 2: 0, 3: 0 };
   let upserted = 0;

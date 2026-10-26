@@ -84,6 +84,7 @@ const cropfortRole = z.enum([
   "bagro_office",
   "spx_validator",
   "farm_owner",
+  "farm_owner_viewer",
   "spx_platform_admin",
 ]);
 

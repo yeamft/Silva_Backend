@@ -65,10 +65,44 @@ async function assertProgramMember(user, programId) {
       programId_organizationId: { programId, organizationId: user.organizationId },
     },
   });
-  if (!membership) {
-    throw new AppError(403, "FORBIDDEN", "Your organization is not a member of this program.");
+  if (membership) return membership;
+
+  const assignedRole = await prisma.cropfort_user_roles.findFirst({
+    where: { programId, userId: user.id },
+    select: { role: true },
+  });
+  if (assignedRole) return { roleInProgram: assignedRole.role };
+
+  const ownerRole = ["silva_owner", "silva_country_manager", "farm_owner", "farm_owner_viewer"];
+  if (ownerRole.includes(user.role)) {
+    const linkedEstate = await prisma.farm_estates.findFirst({
+      where: {
+        programId,
+        status: "active",
+        OR: [
+          ...(user.organizationId ? [{ ownerOrganizationId: user.organizationId }] : []),
+          ...(user.email
+            ? [{
+                farm_estate_asset_owners: {
+                  some: {
+                    asset_owners: {
+                      OR: [
+                        ...(user.organizationId ? [{ organizationId: user.organizationId }] : []),
+                        { contactEmail: { equals: user.email, mode: "insensitive" } },
+                      ],
+                    },
+                  },
+                },
+              }]
+            : []),
+        ],
+      },
+      select: { id: true },
+    });
+    if (linkedEstate) return { roleInProgram: "owner" };
   }
-  return membership;
+
+  throw new AppError(403, "FORBIDDEN", "Your organization is not a member of this program.");
 }
 
 async function ensureDefaultCategories(programId) {
@@ -111,7 +145,64 @@ exports.listPrograms = async (user) => {
     include: { program: true },
     orderBy: { createdAt: "asc" },
   });
-  return memberships.map((m) => programJson(m.program, m));
+
+  const [assignedRoles, linkedEstates] = await Promise.all([
+    prisma.cropfort_user_roles.findMany({
+      where: { userId: user.id, programs: { status: { not: "archived" } } },
+      include: { programs: true },
+      orderBy: { createdAt: "asc" },
+    }),
+    ["silva_owner", "silva_country_manager", "farm_owner", "farm_owner_viewer"].includes(user.role)
+      ? prisma.farm_estates.findMany({
+          where: {
+            status: "active",
+            programs: { status: { not: "archived" } },
+            OR: [
+              ...(user.organizationId ? [{ ownerOrganizationId: user.organizationId }] : []),
+              ...(user.email
+                ? [{
+                    farm_estate_asset_owners: {
+                      some: {
+                        asset_owners: {
+                          OR: [
+                            ...(user.organizationId ? [{ organizationId: user.organizationId }] : []),
+                            { contactEmail: { equals: user.email, mode: "insensitive" } },
+                          ],
+                        },
+                      },
+                    },
+                  }]
+                : []),
+            ],
+          },
+          select: { programs: true },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const available = new Map();
+  for (const membership of memberships) {
+    available.set(membership.program.id, {
+      program: membership.program,
+      membership,
+    });
+  }
+  for (const role of assignedRoles) {
+    available.set(role.programId, {
+      program: role.programs,
+      membership: { roleInProgram: role.role },
+    });
+  }
+  for (const estate of linkedEstates) {
+    const program = estate.programs;
+    if (program && !available.has(program.id)) {
+      available.set(program.id, { program, membership: { roleInProgram: "owner" } });
+    }
+  }
+
+  return [...available.values()]
+    .sort((a, b) => a.program.name.localeCompare(b.program.name))
+    .map(({ program, membership }) => programJson(program, membership));
 };
 
 exports.adminListPrograms = async (user) => {
@@ -265,14 +356,14 @@ exports.switchProgram = async (user, programId) => {
     return programJson(program, { roleInProgram: "manager" });
   }
 
-  await assertProgramMember(user, programId);
+  const membership = await assertProgramMember(user, programId);
   const program = await prisma.programs.findUnique({ where: { id: programId } });
   if (!program) throw new AppError(404, "NOT_FOUND", "Program not found");
   if (program.status === "archived") {
     throw new AppError(400, "PROGRAM_ARCHIVED", "Archived programmes cannot be opened as a workspace.");
   }
   await prisma.users.update({ where: { id: user.id }, data: { activeProgramId: programId } });
-  return programJson(program);
+  return programJson(program, membership);
 };
 
 exports.updateTenantBranding = async (user, dto) => {
