@@ -160,6 +160,7 @@ exports.me = async (user) => {
       where: { id: full.id },
       data: { activeProgramId: null },
     });
+    full.activeProgramId = null;
   }
   const activeProgram =
     full.activeProgram && !activeIsArchived
@@ -182,6 +183,7 @@ exports.me = async (user) => {
               : 5000000,
         }
       : null;
+  const context = activeProgram ? await hydrateUserContext(full) : { cropfortRoles: [] };
   return {
     user: userJson({
       ...full,
@@ -197,6 +199,7 @@ exports.me = async (user) => {
       status: full.organization.status,
     },
     activeProgram,
+    cropfortRoles: context.cropfortRoles,
     programs,
     permissions: permissionsFor(full.role),
     onboardingComplete: Boolean(full.organization?.displayName),

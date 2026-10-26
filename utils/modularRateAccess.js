@@ -54,6 +54,7 @@ function assertView(user) {
   if (
     canViewModularRates(role) ||
     cf.includes("farm_owner") ||
+    cf.includes("farm_owner_viewer") ||
     role === "field_supervisor" ||
     role === "bagro_office" ||
     cf.includes("field_supervisor") ||

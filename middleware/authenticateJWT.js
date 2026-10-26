@@ -48,7 +48,7 @@ module.exports = async (req, res, next) => {
     }
 
     const user = await prisma.users.findUnique({
-      where: { id: userId },
+      where: { id: userId },  
       include: { organization: true },
     });
     if (!user || !user.active) {

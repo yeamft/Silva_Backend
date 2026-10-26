@@ -139,6 +139,12 @@ test("assessment lifecycle: upload, submit, changes, resubmit, approve, with his
   assert.equal(audits.length, 6);
 });
 
+test("assessment titles omit the generated em dash separator", async () => {
+  await seedRow();
+  const dto = await service.get(author, ASSESSMENT_ID);
+  assert.equal(dto.title, "Chaka Annual Farm Assessment 2026 Programme");
+});
+
 test("workspace isolation applies to reads, downloads and writes", async () => {
   await seedRow();
   const other = { ...author, activeProgramId: "elsewhere" };
@@ -170,6 +176,27 @@ test("dual-role authors cannot review their own submissions", async () => {
   const dualRole = { ...author, cropfortRoles: ["farm_owner"] };
   assert.equal((await service.get(dualRole, ASSESSMENT_ID)).canReview, false);
   await rejectsCode(service.decide(dualRole, ASSESSMENT_ID, { revision: row.revision, decision: "approve" }), "FORBIDDEN");
+});
+
+test("farm_owner_viewer can read assessments but cannot decide them", async () => {
+  await seedRow({ status: "submitted", submittedByUserId: author.id });
+  const viewer = {
+    id: "viewer",
+    name: "Asset Owner Viewer",
+    role: "spx_principal",
+    cropfortRoles: ["farm_owner_viewer"],
+    activeProgramId: "workspace",
+  };
+  const dto = await service.get(viewer, ASSESSMENT_ID);
+  assert.equal(dto.status, "submitted");
+  assert.equal(dto.canReview, false);
+  await rejectsCode(
+    service.decide(viewer, ASSESSMENT_ID, {
+      revision: row.revision,
+      decision: "approve",
+    }),
+    "FORBIDDEN",
+  );
 });
 
 test("submission requires at least one finding or condition — PDF is optional", async () => {

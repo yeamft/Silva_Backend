@@ -25,6 +25,12 @@ const editable = (row) => !row || ["draft", "changes_requested"].includes(row.st
 
 // ── helpers ────────────────────────────────────────────────────────────────
 
+function normalizeTitle(title) {
+  return String(title || "")
+    .replace(" Annual Farm Assessment — ", " Annual Farm Assessment ")
+    .replace(/^Annual Farm Assessment — /, "Annual Farm Assessment ");
+}
+
 async function loadAssessment(user, id, db = prisma) {
   assertView(user);
   const programId = requireProgramId(user);
@@ -68,6 +74,7 @@ async function findByPlanId(user, planId, db = prisma) {
 function serialize(row, user) {
   return {
     ...row,
+    title: normalizeTitle(row.title),
     assessedAreaHa: row.assessedAreaHa ? Number(row.assessedAreaHa) : null,
     recommendedOps: Array.isArray(row.recommendedOps) ? row.recommendedOps : [],
     history: Array.isArray(row.history) ? row.history : [],
@@ -117,9 +124,9 @@ async function auditLog(db, user, row, action) {
 function generateTitle(farmName, planYear, planningCycle) {
   const farm = String(farmName || "").trim();
   const cycle = String(planningCycle || "").trim() || (planYear ? `${planYear} Programme` : "");
-  if (farm && cycle) return `${farm} Annual Farm Assessment — ${cycle}`;
+  if (farm && cycle) return `${farm} Annual Farm Assessment ${cycle}`;
   if (farm) return `${farm} Annual Farm Assessment`;
-  return cycle ? `Annual Farm Assessment — ${cycle}` : "Farm Assessment";
+  return cycle ? `Annual Farm Assessment ${cycle}` : "Farm Assessment";
 }
 
 function hasSubmittableContent(row) {
@@ -191,7 +198,7 @@ exports.list = async (user, filters = {}) => {
     farmEstateId: r.farmEstateId || null,
     planYear: r.planYear || null,
     cycleLabel: r.planningCycle || (r.planYear ? `${r.planYear} Programme` : ""),
-    title: r.title || "",
+    title: normalizeTitle(r.title),
     assessmentDate: r.assessmentDate ? r.assessmentDate.toISOString().slice(0, 10) : null,
     assessmentPurpose: r.assessmentPurpose,
     assessedAreaHa: r.assessedAreaHa ? Number(r.assessedAreaHa) : null,
