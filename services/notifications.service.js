@@ -90,6 +90,9 @@ function hrefFor(row) {
   if (row.entityType === "afe") {
     return "/cropfort/afe";
   }
+  if (row.entityType === "report") {
+    return `/cropfort/reports/${encodeURIComponent(row.entityId)}`;
+  }
   if (row.entityType === "programme_plan") {
     return `/cropfort/planning/programmes/${row.entityId}`;
   }
@@ -709,6 +712,40 @@ async function notifyProgrammePlanDecision(programId, plan, decision, actorName)
   });
 }
 
+async function notifyReportSubmitted(programId, report) {
+  return notifyRolesOrUsers({
+    programId,
+    triggerType: "report.submitted",
+    entityType: "report",
+    entityId: report.id,
+    message: `Report ${report.code} (${report.periodLabel}) is ready for your review`,
+    roles: ["silva_owner", "farm_owner"],
+    extraRecipients: await findAssetOwnerRecipients(programId),
+  });
+}
+
+async function notifyReportDecision(programId, report, decision, actorName) {
+  const accepted = decision === "released";
+  await notifyUserById(programId, report.createdByUserId, {
+    triggerType: accepted ? "report.released" : "report.returned",
+    entityType: "report",
+    entityId: report.id,
+    message: accepted
+      ? `${actorName || "Asset owner"} accepted report ${report.code}`
+      : `${actorName || "Asset owner"} returned report ${report.code}${report.returnedComment ? `: ${report.returnedComment}` : ""}`,
+  });
+  if (accepted) {
+    await notifyRolesOrUsers({
+      programId,
+      triggerType: "report.available",
+      entityType: "report",
+      entityId: report.id,
+      message: `Report ${report.code} (${report.periodLabel}) is available`,
+      roles: ["farm_owner_viewer", "silva_country_manager", "silva_finance"],
+    });
+  }
+}
+
 // Assessment state and its notifications commit together.
 async function notifyFarmAssessment(plan, assessment, action, actorName, db = prisma) {
   const submitted = action === "submitted";
@@ -759,4 +796,6 @@ module.exports = {
   notifySettlementSettled,
   notifyProgrammePlanSubmitted,
   notifyProgrammePlanDecision,
+  notifyReportSubmitted,
+  notifyReportDecision,
 };

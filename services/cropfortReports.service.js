@@ -4,6 +4,16 @@ const { uuid } = require("../utils/ids");
 const { nextCodeNumber, isUniqueViolation } = require("../utils/codeSequence");
 const { permissionsFor, isSpxRole, isAssetOwnerApprover } = require("../utils/roles");
 const { Prisma } = require("@prisma/client");
+const notifications = require("./notifications.service");
+
+/** Notifications never block the report change itself. */
+async function notifySafely(send) {
+  try {
+    await send();
+  } catch (err) {
+    console.error("[reports] notification failed:", err?.message || err);
+  }
+}
 
 function requireProgramId(user) {
   if (!user.activeProgramId) {
@@ -21,9 +31,9 @@ function canDraft(user) {
   );
 }
 
+/** SPX drafts and submits; the asset owner accepts (releases) or returns. */
 function canRelease(user) {
-  const perms = permissionsFor(user.role) || [];
-  return perms.includes("reports.release") || isAssetOwnerApprover(user) || user.role === "system_admin";
+  return isAssetOwnerApprover(user) || user.role === "system_admin";
 }
 
 function canRead(user) {
@@ -33,7 +43,8 @@ function canRead(user) {
     canRelease(user) ||
     perms.includes("reports.read_released") ||
     isSpxRole(user.role) ||
-    ["farm_owner", "field_supervisor", "vendor", "vendor_ops"].includes(user.role)
+    ["farm_owner", "farm_owner_viewer", "field_supervisor", "vendor", "vendor_ops"].includes(user.role) ||
+    (user.cropfortRoles || []).includes("farm_owner_viewer")
   );
 }
 
@@ -181,8 +192,8 @@ exports.updateDraft = async (user, id, body) => {
   const programId = requireProgramId(user);
   const existing = await prisma.reports.findFirst({ where: { id, programId } });
   if (!existing) throw new AppError(404, "NOT_FOUND", "Report not found");
-  if (existing.status !== "draft" && existing.status !== "returned") {
-    throw new AppError(400, "INVALID_STATUS", "Only draft/returned reports can be edited");
+  if (existing.status === "released") {
+    throw new AppError(400, "INVALID_STATUS", "Accepted reports can't be edited");
   }
 
   const patch = {};
@@ -215,10 +226,15 @@ exports.updateDraft = async (user, id, body) => {
     id: uuid("rev"),
     at: new Date().toISOString(),
     actor: user.name || "User",
-    action: "Updated draft",
+    action: existing.status === "submitted" ? "Taken back from review and edited" : "Edited",
   });
   patch.eventsJson = events;
   patch.updatedAt = new Date();
+  // Editing a submitted report pulls it back from the asset owner's review
+  if (existing.status === "submitted") {
+    patch.status = "draft";
+    patch.submittedAt = null;
+  }
 
   const updated = await prisma.reports.update({ where: { id }, data: patch });
   return serialize(updated);
@@ -249,6 +265,7 @@ exports.submitReport = async (user, id) => {
       updatedAt: new Date(),
     },
   });
+  await notifySafely(() => notifications.notifyReportSubmitted(programId, updated));
   return serialize(updated);
 };
 
@@ -279,6 +296,7 @@ exports.releaseReport = async (user, id, body = {}) => {
       updatedAt: new Date(),
     },
   });
+  await notifySafely(() => notifications.notifyReportDecision(programId, updated, "released", user.name));
   return serialize(updated);
 };
 
@@ -289,6 +307,9 @@ exports.returnReport = async (user, id, body = {}) => {
   if (!existing) throw new AppError(404, "NOT_FOUND", "Report not found");
   if (existing.status !== "submitted") {
     throw new AppError(400, "INVALID_STATUS", "Only submitted reports can be returned");
+  }
+  if (!String(body.comment || "").trim()) {
+    throw new AppError(400, "VALIDATION_ERROR", "Say what needs to change before returning");
   }
   const events = Array.isArray(existing.eventsJson) ? [...existing.eventsJson] : [];
   events.push({
@@ -306,6 +327,7 @@ exports.returnReport = async (user, id, body = {}) => {
       updatedAt: new Date(),
     },
   });
+  await notifySafely(() => notifications.notifyReportDecision(programId, updated, "returned", user.name));
   return serialize(updated);
 };
 
@@ -315,7 +337,7 @@ exports.deleteReport = async (user, id) => {
   const existing = await prisma.reports.findFirst({ where: { id, programId } });
   if (!existing) throw new AppError(404, "NOT_FOUND", "Report not found");
   if (existing.status === "released") {
-    throw new AppError(400, "INVALID_STATUS", "Released reports cannot be deleted");
+    throw new AppError(400, "INVALID_STATUS", "Accepted reports can't be deleted");
   }
   await prisma.reports.delete({ where: { id } });
   return { ok: true };
