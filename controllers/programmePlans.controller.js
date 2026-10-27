@@ -46,7 +46,7 @@ exports.readiness = catchAsync(async (req, res) => {
 });
 
 exports.submit = catchAsync(async (req, res) => {
-  res.json({ data: await service.submitPlan(req.user, req.params.id) });
+  res.json({ data: await service.submitPlan(req.user, req.params.id, req.validatedBody || {}) });
 });
 
 exports.decide = catchAsync(async (req, res) => {

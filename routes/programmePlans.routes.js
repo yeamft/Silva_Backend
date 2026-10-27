@@ -27,7 +27,7 @@ router.get("/:id", ctrl.get);
 router.put("/:id", validate(schemas.programmePlanUpsert), ctrl.upsert);
 router.patch("/:id/schedule", validate(schemas.programmePlanSchedule), ctrl.patchSchedule);
 router.get("/:id/readiness", ctrl.readiness);
-router.post("/:id/submit", ctrl.submit);
+router.post("/:id/submit", validate(schemas.programmePlanSubmit), ctrl.submit);
 router.post("/:id/decide", validate(schemas.programmePlanDecide), ctrl.decide);
 router.post("/:id/duplicate", ctrl.duplicate);
 router.post("/:id/archive", ctrl.archive);

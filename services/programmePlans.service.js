@@ -3,7 +3,7 @@ const prisma = require("../config/database");
 const { uuid } = require("../utils/ids");
 const { loadFarmForUser, requireProgramId, num } = require("../utils/farmRateAccess");
 const { assertView, assertEdit, assertDecide } = require("../utils/modularRateAccess");
-const { isSpxRole, isAssetOwnerApprover } = require("../utils/roles");
+const { isAssetOwnerApprover } = require("../utils/roles");
 const { Prisma } = require("@prisma/client");
 const notifications = require("./notifications.service");
 
@@ -155,13 +155,12 @@ function resolveBandFromProgram(program, costEtb) {
   else if (cost <= bMax) band = "B";
   else if (cost <= cMax) band = "C";
   const silvaGate = band === "C" || band === "D";
+  // Core Operations plans go to the asset owner in every band; no AFE is raised for them.
   return {
     band,
     thresholdExceeded: silvaGate,
-    approvalLevel: silvaGate ? "silva" : "spx",
-    approvalRequirement: silvaGate
-      ? `Band ${band}: requires Silva gate (above ETB ${bMax.toLocaleString()})`
-      : `Band ${band}: SPX can approve / auto-route`,
+    approvalLevel: "silva",
+    approvalRequirement: `Band ${band}: asset owner approval (no AFE needed)`,
     thresholds: { aMax, bMax, cMax },
   };
 }
@@ -377,8 +376,9 @@ exports.createPlan = async (user, body) => {
   const planningCycleLabel =
     String(body.planningCycleLabel || "").trim() || `${year} Programme`;
 
+  // Archived plans don't hold the budget year — a new plan can replace them.
   const existing = await prisma.cropfort_programme_plans.findFirst({
-    where: { programId, farmEstateId: farm.id, planYear: year },
+    where: { programId, farmEstateId: farm.id, planYear: year, status: { not: "archived" } },
     select: { id: true, name: true, status: true },
   });
   if (existing) {
@@ -661,8 +661,61 @@ exports.getReadiness = async (user, planId) => {
   return buildReadiness(plan);
 };
 
-exports.submitPlan = async (user, planId) => {
+/** What was submitted: plan details plus every included activity with its quantity, rate, blocks and schedule. */
+function submissionSnapshot(plan) {
+  const payload = planJson(plan);
+  const lines = payload.activityIds
+    .map((id) => payload.activities[id])
+    .filter((l) => l.included)
+    .map((l) => ({
+      activityId: l.activityId,
+      activityCode: l.activityCode,
+      activityName: l.activityName,
+      category: l.category,
+      uom: l.uom,
+      scope: l.scope,
+      plannedQty: l.plannedQty,
+      unitRateEtb: l.agreedRate?.unitRateEtb ?? null,
+      rateCardId: l.agreedRate?.rateCardId || null,
+      plannedCost: l.plannedCost,
+      months: PLAN_MONTHS.filter((m) => l.intensities[m] && l.intensities[m] !== "none"),
+      intensities: l.intensities,
+      blockAllocations: l.blockAllocations,
+      manualsRef: l.manualsRef,
+      serviceType: l.serviceType,
+      notes: l.notes,
+    }));
+  return {
+    name: payload.name,
+    code: payload.code,
+    farmEstateId: payload.farmEstateId,
+    farmName: payload.farmName,
+    planYear: payload.budgetYearGc,
+    budgetYearLabel: payload.budgetYearLabel,
+    planningCycleLabel: payload.planningCycleLabel,
+    description: payload.description,
+    notes: payload.notes,
+    vendorLabel: payload.vendorLabel,
+    totalHa: payload.totalHa,
+    applicableBlockIds: payload.applicableBlockIds,
+    annualPlanData: payload.annualPlanData,
+    plannedCostEtb: payload.plannedCostEtb,
+    lines,
+  };
+}
+
+exports.submitPlan = async (user, planId, body = {}) => {
   assertEdit(user);
+  // The editor sends the whole plan with the submit so details, activities and schedule are saved
+  // together with it — never a stale server copy.
+  const { status: _ignored, ...incoming } = body || {};
+  if (Object.keys(incoming).length) {
+    const current = await loadPlanScoped(user, planId);
+    if (!SUBMITTABLE.has(current.status)) {
+      throw new AppError(409, "INVALID_STATE_TRANSITION", `Cannot submit from ${current.status}`);
+    }
+    await exports.upsertPlan(user, planId, incoming);
+  }
   const plan = await loadPlanScoped(user, planId);
   if (!SUBMITTABLE.has(plan.status)) {
     throw new AppError(409, "INVALID_STATE_TRANSITION", `Cannot submit from ${plan.status}`);
@@ -673,7 +726,8 @@ exports.submitPlan = async (user, planId) => {
   }
 
   const bandInfo = resolveBandFromProgram(plan.programs, readiness.metrics.totalPlannedCost);
-  const autoApprove = !bandInfo.thresholdExceeded && (isSpxRole(user.role) || user.role === "spx_platform_admin" || user.role === "spx_validator");
+  // Core Operations plans always go to the asset owner — no AFE band auto-approval.
+  const autoApprove = false;
 
   const updated = await prisma.cropfort_programme_plans.update({
     where: { id: plan.id },
@@ -705,6 +759,7 @@ exports.submitPlan = async (user, planId) => {
       status: updated.status,
       band: bandInfo.band,
       plannedCostEtb: readiness.metrics.totalPlannedCost,
+      submission: submissionSnapshot(updated),
     },
   });
 
@@ -837,6 +892,23 @@ exports.listPlans = async (user, { farmEstateId, planYear, status, q, includeArc
 exports.duplicatePlan = async (user, planId) => {
   assertEdit(user);
   const source = await loadPlanScoped(user, planId);
+  // The copy lands in the same budget year, which allows only one live plan.
+  const live = await prisma.cropfort_programme_plans.findFirst({
+    where: {
+      programId: source.programId,
+      farmEstateId: source.farmEstateId,
+      planYear: source.planYear,
+      status: { not: "archived" },
+    },
+    select: { name: true },
+  });
+  if (live) {
+    throw new AppError(
+      409,
+      "CONFLICT",
+      `"${live.name}" is already the live plan for this farm and ${source.planYear}. Archive it before duplicating into that year.`,
+    );
+  }
   const copy = await prisma.$transaction(async (tx) => {
     const created = await tx.cropfort_programme_plans.create({
       data: {
@@ -945,3 +1017,4 @@ exports.archivePlan = async (user, planId) => {
 exports.mapStatusFromFe = mapStatusFromFe;
 exports.buildReadiness = buildReadiness;
 exports.resolveBandFromProgram = resolveBandFromProgram;
+exports.submissionSnapshot = submissionSnapshot;

@@ -311,6 +311,9 @@ const programmePlanUpsert = z.object({
   activities: z.record(z.string(), programmePlanLine).optional(),
 });
 
+/** Submit may carry the full plan (details, lines, schedule) so it is saved and submitted together. */
+const programmePlanSubmit = programmePlanUpsert.optional();
+
 const programmePlanSchedule = z.object({
   lines: z
     .array(
@@ -622,6 +625,7 @@ module.exports = {
   rateCardReject,
   programmePlanCreate,
   programmePlanUpsert,
+  programmePlanSubmit,
   programmePlanSchedule,
   programmePlanDecide,
   cropfortAfeCreate,
