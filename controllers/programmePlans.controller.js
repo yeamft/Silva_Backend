@@ -1,5 +1,6 @@
 const catchAsync = require("../utils/catchAsync");
 const service = require("../services/programmePlans.service");
+const monthlyWorkOrders = require("../services/cropfortMonthlyWorkOrders.service");
 
 exports.list = catchAsync(async (req, res) => {
   res.json({
@@ -59,4 +60,8 @@ exports.duplicate = catchAsync(async (req, res) => {
 
 exports.archive = catchAsync(async (req, res) => {
   res.json({ data: await service.archivePlan(req.user, req.params.id) });
+});
+
+exports.createWorkOrders = catchAsync(async (req, res) => {
+  res.status(201).json({ data: await monthlyWorkOrders.createFromPlan(req.user, req.params.id) });
 });

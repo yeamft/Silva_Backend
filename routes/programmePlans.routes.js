@@ -29,6 +29,7 @@ router.patch("/:id/schedule", validate(schemas.programmePlanSchedule), ctrl.patc
 router.get("/:id/readiness", ctrl.readiness);
 router.post("/:id/submit", validate(schemas.programmePlanSubmit), ctrl.submit);
 router.post("/:id/decide", validate(schemas.programmePlanDecide), ctrl.decide);
+router.post("/:id/work-orders", ctrl.createWorkOrders);
 router.post("/:id/duplicate", ctrl.duplicate);
 router.post("/:id/archive", ctrl.archive);
 

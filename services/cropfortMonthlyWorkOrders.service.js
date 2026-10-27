@@ -355,3 +355,127 @@ exports.addOutOfPlanLine = async (user, id, body) => {
   });
   return serialize(updated);
 };
+
+const PLAN_MONTHS = ["oct", "nov", "dec", "jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep"];
+/** Same weights the monthly work order screen uses to spread a plan line over its scheduled months. */
+const INTENSITY_SHARE = { peak: 0.4, active: 0.25, light: 0.1 };
+const round2 = (n) => Math.round(n * 100) / 100;
+
+/**
+ * Turn an approved Core Operations plan into one monthly work order per scheduled month.
+ * The asset owner already approved the plan, so the orders start approved and SPX activates them.
+ * Months that already have an order from this plan are skipped, so it is safe to run again.
+ */
+function assertSpxDesk(user) {
+  const cf = user.cropfortRoles || [];
+  if (
+    isSpxRole(user.role) ||
+    ["system_admin", "spx_platform_admin", "spx_validator"].includes(user.role) ||
+    cf.includes("spx_validator") ||
+    cf.includes("spx_platform_admin")
+  ) {
+    return;
+  }
+  throw new AppError(403, "FORBIDDEN", "Only the SPX desk can create work orders from a plan");
+}
+
+exports.createFromPlan = async (user, planId) => {
+  assertSpxDesk(user);
+  const programId = requireProgramId(user);
+  const plan = await prisma.cropfort_programme_plans.findFirst({
+    where: { id: planId, programId },
+    include: { lines: { orderBy: { sortOrder: "asc" } }, farm_estates: { select: { id: true, name: true } } },
+  });
+  if (!plan) throw new AppError(404, "NOT_FOUND", "Programme plan not found");
+  if (plan.status !== "approved" && plan.status !== "active") {
+    throw new AppError(409, "INVALID_STATE_TRANSITION", "Only approved plans can be turned into work orders");
+  }
+
+  const blocks = plan.applicableBlockIds?.length
+    ? await prisma.farm_blocks.findMany({ where: { id: { in: plan.applicableBlockIds } }, select: { id: true, code: true } })
+    : [];
+  const defaultBlock = blocks[0] || null;
+
+  const existing = await prisma.cropfort_monthly_work_orders.findMany({
+    where: { programId, sourcePlanId: plan.id },
+    select: { ethiopianMonth: true },
+  });
+  const done = new Set(existing.map((e) => e.ethiopianMonth));
+
+  const included = plan.lines.filter((l) => l.included);
+  const created = [];
+  const skipped = [];
+  const now = new Date();
+
+  for (const month of PLAN_MONTHS) {
+    if (done.has(month)) {
+      skipped.push(month);
+      continue;
+    }
+    const lines = [];
+    for (const line of included) {
+      const intensities = line.intensities || {};
+      const share = INTENSITY_SHARE[intensities[month]] || 0;
+      if (!share) continue;
+      const totalWeight = PLAN_MONTHS.reduce((s, m) => s + (INTENSITY_SHARE[intensities[m]] || 0), 0) || 1;
+      const monthShare = share / totalWeight;
+      const qty = num(line.plannedQty) * monthShare;
+      const cost = num(line.plannedCostEtb) * monthShare;
+      if (qty <= 0) continue;
+
+      const allocations = Array.isArray(line.blockAllocations) && line.blockAllocations.length
+        ? line.blockAllocations
+        : line.scope === "off_block" || !defaultBlock
+          ? [{ blockId: null, blockCode: "", qty: 1 }]
+          : [{ blockId: defaultBlock.id, blockCode: defaultBlock.code, qty: 1 }];
+      const allocTotal = allocations.reduce((s, a) => s + num(a.qty), 0) || 1;
+      for (const alloc of allocations) {
+        const part = num(alloc.qty) / allocTotal;
+        if (part <= 0) continue;
+        lines.push({
+          activityId: line.activityId,
+          activityCode: line.activityCode,
+          activityName: line.activityName,
+          blockId: alloc.blockId || null,
+          blockCode: alloc.blockCode || "",
+          plannedQty: round2(qty * part),
+          unit: line.uom,
+          etb: round2(cost * part),
+          manualsRef: line.manualsRef || "",
+          inPlan: true,
+        });
+      }
+    }
+    if (!lines.length) continue;
+
+    const lineData = normalizeLines(lines);
+    const totalEtb = lineData.reduce((s, l) => s + num(l.etb), 0);
+    // Plan year is the GC year the budget ends in: Tikimt–Tahsas fall in the year before
+    const yearGc = ["oct", "nov", "dec"].includes(month) ? plan.planYear - 1 : plan.planYear;
+    const code = `MWO-${plan.code || plan.id.slice(-6).toUpperCase()}-${month.toUpperCase()}`;
+
+    const row = await prisma.cropfort_monthly_work_orders.create({
+      data: {
+        id: uuid("mwo"),
+        programId,
+        code,
+        farmId: plan.farmEstateId,
+        farmName: plan.farm_estates?.name || "",
+        ethiopianMonth: month,
+        yearGc,
+        status: "approved",
+        approvedAt: now,
+        sourcePlanId: plan.id,
+        totalEtb: new Prisma.Decimal(totalEtb.toFixed(2)),
+        note: `From approved plan ${plan.name || plan.code}`,
+        createdByUserId: user.id,
+        updatedAt: now,
+        lines: { create: lineData },
+      },
+      include: INCLUDE,
+    });
+    created.push(serialize(row));
+  }
+
+  return { created, skipped };
+};
