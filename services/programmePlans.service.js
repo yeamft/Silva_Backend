@@ -22,6 +22,48 @@ const PLAN_MONTHS = [
   "sep",
 ];
 
+/** A plan covers the whole year or one half of it. */
+const PLAN_PERIODS = {
+  annual: { months: PLAN_MONTHS, label: "Full year" },
+  first_half: { months: PLAN_MONTHS.slice(0, 6), label: "Tikimt–Megabit" },
+  second_half: { months: PLAN_MONTHS.slice(6), label: "Miyazya–Meskerem" },
+};
+
+function resolvePeriod(value) {
+  const period = value || "annual";
+  if (!PLAN_PERIODS[period]) {
+    throw new AppError(400, "VALIDATION_ERROR", "planPeriod must be annual, first_half or second_half");
+  }
+  return period;
+}
+
+/** Months outside the plan's period can't be scheduled. */
+function clampToPeriod(intensities, period) {
+  const allowed = new Set((PLAN_PERIODS[period] || PLAN_PERIODS.annual).months);
+  const out = { ...intensities };
+  for (const m of PLAN_MONTHS) if (!allowed.has(m)) out[m] = "none";
+  return out;
+}
+
+/** A live plan already covering any of the same months for this farm area and year. */
+function findOverlappingLivePlan({ programId, farmEstateId, planYear, planPeriod }) {
+  return prisma.cropfort_programme_plans.findFirst({
+    where: {
+      programId,
+      farmEstateId,
+      planYear,
+      status: { not: "archived" },
+      ...(planPeriod === "annual" ? {} : { planPeriod: { in: [planPeriod, "annual"] } }),
+    },
+    select: { name: true, planPeriod: true },
+  });
+}
+
+function overlapMessage(live, planYear) {
+  const covers = live.planPeriod === "annual" ? "the full year" : PLAN_PERIODS[live.planPeriod]?.label;
+  return `"${live.name}" already covers ${covers} of ${planYear} for this farm. Archive it first, or plan a different period.`;
+}
+
 const EDITABLE = new Set(["draft", "returned", "ready_for_review"]);
 const SUBMITTABLE = new Set(["draft", "returned", "ready_for_review"]);
 
@@ -221,6 +263,7 @@ function planJson(plan) {
     farmEstateId: plan.farmEstateId,
     farmName,
     budgetYearGc: plan.planYear,
+    planPeriod: plan.planPeriod || "annual",
     budgetYearLabel: plan.budgetYearLabel || "",
     programBandSetId: plan.programBandSetId,
     totalHa: num(plan.totalHa) ?? 0,
@@ -373,21 +416,14 @@ exports.createPlan = async (user, body) => {
   const budgetYearLabel =
     String(body.budgetYearLabel || "").trim() ||
     `${ecStart}/${String(ecEnd).slice(-2)} EC (${year - 1}/${String(year).slice(-2)} GC)`;
+  const planPeriod = resolvePeriod(body.planPeriod);
   const planningCycleLabel =
-    String(body.planningCycleLabel || "").trim() || `${year} Programme`;
+    String(body.planningCycleLabel || "").trim() ||
+    (planPeriod === "annual" ? `${year} Programme` : `${year} Programme · ${PLAN_PERIODS[planPeriod].label}`);
 
-  // Archived plans don't hold the budget year — a new plan can replace them.
-  const existing = await prisma.cropfort_programme_plans.findFirst({
-    where: { programId, farmEstateId: farm.id, planYear: year, status: { not: "archived" } },
-    select: { id: true, name: true, status: true },
-  });
-  if (existing) {
-    throw new AppError(
-      409,
-      "CONFLICT",
-      `A programme plan already exists for this farm and ${year} (${existing.name}). Open it instead of creating another.`,
-    );
-  }
+  // Archived plans don't hold the period — a new plan can replace them.
+  const existing = await findOverlappingLivePlan({ programId, farmEstateId: farm.id, planYear: year, planPeriod });
+  if (existing) throw new AppError(409, "CONFLICT", overlapMessage(existing, year));
 
   const plan = await prisma.cropfort_programme_plans.create({
     data: {
@@ -395,6 +431,7 @@ exports.createPlan = async (user, body) => {
       programId,
       farmEstateId: farm.id,
       planYear: year,
+      planPeriod,
       name,
       code: String(body.code || "").trim() || makePlanCode(),
       description: String(body.description || "").trim(),
@@ -543,7 +580,7 @@ exports.upsertPlan = async (user, planId, body) => {
           ? computeLineCost(qty, rate)
           : { cost: 0, rateStatus: rate != null ? "VALID" : "MISSING" };
         if (included) total += cost;
-        const intensities = normalizeIntensities(raw.intensities);
+        const intensities = clampToPeriod(normalizeIntensities(raw.intensities), plan.planPeriod);
         await tx.cropfort_programme_plan_lines.create({
           data: {
             id: String(raw.id || "").startsWith("pline_") || String(raw.id || "").startsWith("copact_")
@@ -634,7 +671,7 @@ exports.patchSchedule = async (user, planId, body) => {
       }
       await tx.cropfort_programme_plan_lines.update({
         where: { id: line.id },
-        data: { intensities },
+        data: { intensities: clampToPeriod(intensities, plan.planPeriod) },
       });
     }
     if (plan.status === "ready_for_review") {
@@ -892,23 +929,14 @@ exports.listPlans = async (user, { farmEstateId, planYear, status, q, includeArc
 exports.duplicatePlan = async (user, planId) => {
   assertEdit(user);
   const source = await loadPlanScoped(user, planId);
-  // The copy lands in the same budget year, which allows only one live plan.
-  const live = await prisma.cropfort_programme_plans.findFirst({
-    where: {
-      programId: source.programId,
-      farmEstateId: source.farmEstateId,
-      planYear: source.planYear,
-      status: { not: "archived" },
-    },
-    select: { name: true },
+  // The copy lands in the same year and period, which allow only one live plan.
+  const live = await findOverlappingLivePlan({
+    programId: source.programId,
+    farmEstateId: source.farmEstateId,
+    planYear: source.planYear,
+    planPeriod: source.planPeriod || "annual",
   });
-  if (live) {
-    throw new AppError(
-      409,
-      "CONFLICT",
-      `"${live.name}" is already the live plan for this farm and ${source.planYear}. Archive it before duplicating into that year.`,
-    );
-  }
+  if (live) throw new AppError(409, "CONFLICT", overlapMessage(live, source.planYear));
   const copy = await prisma.$transaction(async (tx) => {
     const created = await tx.cropfort_programme_plans.create({
       data: {
@@ -916,6 +944,7 @@ exports.duplicatePlan = async (user, planId) => {
         programId: source.programId,
         farmEstateId: source.farmEstateId,
         planYear: source.planYear,
+        planPeriod: source.planPeriod || "annual",
         name: `${String(source.name || "Programme plan").trim()} (copy)`,
         code: makePlanCode(),
         description: source.description || "",

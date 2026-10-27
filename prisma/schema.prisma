@@ -861,6 +861,8 @@ model cropfort_programme_plans {
   programId            String
   farmEstateId         String
   planYear             Int
+  /// annual (Tikimt–Meskerem), first_half (Tikimt–Megabit) or second_half (Miyazya–Meskerem)
+  planPeriod           String                              @default("annual")
   /// User-facing programme plan name (not the workspace or farm area).
   name                 String                              @default("")
   code                 String                              @default("")

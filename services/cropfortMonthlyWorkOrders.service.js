@@ -3,6 +3,7 @@ const prisma = require("../config/database");
 const { uuid } = require("../utils/ids");
 const { permissionsFor, isSpxRole, isSilvaRole, isVendorRole, isAssetOwnerApprover } = require("../utils/roles");
 const { Prisma } = require("@prisma/client");
+const workOrders = require("./workOrders.service");
 
 function requireProgramId(user) {
   if (!user.activeProgramId) {
@@ -277,19 +278,114 @@ exports.decideMonthlyWorkOrder = async (user, id, body) => {
   return serialize(updated);
 };
 
+/** First day of each Ethiopian month in the GC calendar (Meskerem 1 = 11 Sep; months are 30 days). */
+const EC_MONTH_START = {
+  oct: [10, 11], nov: [11, 10], dec: [12, 10], jan: [1, 9], feb: [2, 8], mar: [3, 10],
+  apr: [4, 9], may: [5, 9], jun: [6, 8], jul: [7, 8], aug: [8, 7], sep: [9, 11],
+};
+const EC_MONTH_NAME = {
+  oct: "Tikimt", nov: "Hidar", dec: "Tahsas", jan: "Tir", feb: "Yekatit", mar: "Megabit",
+  apr: "Miyazya", may: "Ginbot", jun: "Sene", jul: "Hamle", aug: "Nehase", sep: "Meskerem",
+};
+
+function weekOfYear(date) {
+  const start = Date.UTC(date.getUTCFullYear(), 0, 1);
+  return Math.min(53, Math.max(1, Math.ceil(((date.getTime() - start) / 86400000 + 1) / 7)));
+}
+
+/** Week numbers the Ethiopian month covers, for the work order's week range. */
+function monthWeeks(month, yearGc) {
+  const [m, d] = EC_MONTH_START[month] || [1, 1];
+  const first = new Date(Date.UTC(yearGc, m - 1, d));
+  const last = new Date(first.getTime() + 29 * 86400000);
+  const weekStart = weekOfYear(first);
+  // Tahsas runs into January; keep the range inside the starting year
+  const weekEnd = last.getUTCFullYear() === first.getUTCFullYear() ? weekOfYear(last) : 53;
+  return { weekStart, weekEnd };
+}
+
+/**
+ * Activating a monthly work order issues its work: one work order per line, with the farm area,
+ * block, vendor and the month's weeks filled in. Lines already turned into work orders are skipped,
+ * so a retry after a partial failure doesn't duplicate them.
+ */
 exports.activateMonthlyWorkOrder = async (user, id) => {
   assertWrite(user);
   const existing = await load(user, id);
   if (existing.status !== "approved" && existing.status !== "submitted") {
     throw new AppError(400, "INVALID_STATUS", "Approve the monthly WO before activating");
   }
+
+  const programId = existing.programId;
+  const vendorLink = existing.farmId
+    ? await prisma.farm_estate_vendors.findFirst({
+        where: { farmEstateId: existing.farmId },
+        orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+        select: { vendorId: true },
+      })
+    : null;
+  const { weekStart, weekEnd } = monthWeeks(existing.ethiopianMonth, existing.yearGc);
+  const monthLabel = `${EC_MONTH_NAME[existing.ethiopianMonth] || existing.ethiopianMonth} ${existing.yearGc}`;
+
+  const lines = (existing.lines || []).filter((l) => num(l.etb) > 0 || num(l.plannedQty) > 0);
+  const titleFor = (l) => [l.activityName, l.blockCode, monthLabel].filter(Boolean).join(" · ");
+  const already = await prisma.work_orders.findMany({
+    where: { programId, title: { in: lines.map(titleFor) } },
+    select: { title: true },
+  });
+  const done = new Set(already.map((w) => w.title));
+
+  let issued = 0;
+  const heldBack = [];
+  for (const line of lines) {
+    const title = titleFor(line);
+    if (done.has(title)) continue;
+    const payload = {
+      title,
+      activity: line.activityName,
+      plannedCostEtb: num(line.etb),
+      weekStart,
+      weekEnd,
+      farmEstateId: existing.farmId || undefined,
+      assignedVendorId: vendorLink?.vendorId || undefined,
+      instructions:
+        [`${num(line.plannedQty)} ${line.unit || ""}`.trim(), line.manualsRef, `From ${existing.code}`]
+          .filter(Boolean)
+          .join(" · "),
+      blockId: line.blockId || undefined,
+    };
+    let wo;
+    try {
+      wo = await workOrders.createWorkOrder(user, payload);
+    } catch (err) {
+      // Lines can carry a block that has since left the programme map
+      if (!payload.blockId) throw err;
+      wo = await workOrders.createWorkOrder(user, { ...payload, blockId: undefined });
+    }
+    try {
+      await workOrders.transitionWorkOrder(user, wo.id, { status: "issued" });
+      issued += 1;
+    } catch (err) {
+      // e.g. the vendor's insurance isn't on file — the order waits as a draft
+      heldBack.push(`${wo.code}: ${err?.message || "could not issue"}`);
+    }
+  }
+
   const now = new Date();
+  const summary = `Issued ${issued} work order${issued === 1 ? "" : "s"}${
+    heldBack.length ? `; ${heldBack.length} kept as draft (${heldBack.join("; ")})` : ""
+  }`;
   const updated = await prisma.cropfort_monthly_work_orders.update({
     where: { id },
-    data: { status: "active", activatedAt: now, updatedAt: now },
+    data: {
+      status: "active",
+      activatedAt: now,
+      note: existing.note ? `${existing.note}\n${summary}` : summary,
+      updatedAt: now,
+    },
     include: INCLUDE,
   });
-  return serialize(updated);
+  return { ...serialize(updated), issuedCount: issued, heldBack };
 };
 
 exports.setMonthlyWorkOrderLoop = async (user, id, loop) => {

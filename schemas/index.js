@@ -286,6 +286,7 @@ const programmePlanCreate = z.object({
   name: z.string().min(1),
   farmEstateId: z.string().min(1),
   planYear: z.number().int().min(2000).max(2100),
+  planPeriod: z.enum(["annual", "first_half", "second_half"]).optional(),
   planningCycleLabel: z.string().optional(),
   budgetYearLabel: z.string().optional(),
   description: z.string().optional(),
