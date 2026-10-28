@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
 }
 
 model organizations {
@@ -231,6 +232,7 @@ model refresh_sessions {
   user          users     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, revoked])
+  @@index([userId, revoked, expiresAt])
 }
 
 model password_reset_tokens {
@@ -986,6 +988,7 @@ model cropfort_programme_plan_lines {
 
   @@unique([planId, activityId])
   @@index([planId, included])
+  @@index([planId])
   @@index([activityId])
 }
 
@@ -2277,6 +2280,7 @@ model work_orders {
   @@index([cropfortAfeId])
   @@index([assignedVendorId])
   @@index([farmEstateId])
+  @@index([programId, updatedAt])
   @@unique([programId, code])
 }
 

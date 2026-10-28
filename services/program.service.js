@@ -137,16 +137,16 @@ exports.listPrograms = async (user) => {
     return rows.map((p) => programJson(p, p.memberships[0] || { roleInProgram: "manager" }));
   }
 
-  const memberships = await prisma.program_memberships.findMany({
-    where: {
-      organizationId: user.organizationId,
-      program: { status: { not: "archived" } },
-    },
-    include: { program: true },
-    orderBy: { createdAt: "asc" },
-  });
-
-  const [assignedRoles, linkedEstates] = await Promise.all([
+  // Memberships, role assignments and linked estates are independent: one round trip for all three
+  const [memberships, assignedRoles, linkedEstates] = await Promise.all([
+    prisma.program_memberships.findMany({
+      where: {
+        organizationId: user.organizationId,
+        program: { status: { not: "archived" } },
+      },
+      include: { program: true },
+      orderBy: { createdAt: "asc" },
+    }),
     prisma.cropfort_user_roles.findMany({
       where: { userId: user.id, programs: { status: { not: "archived" } } },
       include: { programs: true },

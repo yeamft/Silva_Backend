@@ -29,10 +29,11 @@ function signAccess(user, sessionId) {
 }
 
 async function tokenBundle(user, options = {}) {
-  const full = await prisma.users.findUnique({
-    where: { id: user.id },
-    include: { organization: true },
-  });
+  // Reuse the already-loaded user if it has organization; avoid a second findUnique
+  const full =
+    user.organization
+      ? user
+      : await prisma.users.findUnique({ where: { id: user.id }, include: { organization: true } });
   const jti = uuid("ses");
   const refreshToken = jwt.sign({ sub: full.id, jti, typ: "refresh" }, env.JWT_REFRESH_SECRET, {
     expiresIn: env.JWT_REFRESH_EXPIRES_IN,
@@ -68,7 +69,7 @@ exports.reissueTokens = async (userId) => {
 exports.login = async (email, password) => {
   const user = await prisma.users.findUnique({
     where: { email: email.toLowerCase() },
-    include: { organization: true },
+    include: { organization: true, activeProgram: true },
   });
   if (!user) throw new AppError(401, "UNAUTHENTICATED", "Invalid email or password.");
   if (!user.active) {
@@ -81,7 +82,14 @@ exports.login = async (email, password) => {
   if (user.organization?.status === "suspended") {
     throw new AppError(403, "FORBIDDEN", "Organization is suspended.");
   }
-  const ok = await bcrypt.compare(password, user.passwordHash);
+
+  // bcrypt, roles and programs don't depend on each other: run them together.
+  // Nothing loaded here is returned unless the password checks out.
+  const [ok, ctx, programs] = await Promise.all([
+    bcrypt.compare(password, user.passwordHash),
+    hydrateUserContext(user),
+    programService.listPrograms(user),
+  ]);
   if (!ok) throw new AppError(401, "UNAUTHENTICATED", "Invalid email or password.");
 
   if (authTotp.otpEnabled()) {
@@ -102,9 +110,13 @@ exports.login = async (email, password) => {
     };
   }
 
-  await hydrateUserContext(user);
+  // Pass the already-loaded user (with organization) so tokenBundle skips its findUnique
   const tokens = await tokenBundle(user);
-  const me = await exports.me({ id: user.id });
+  // ensureActiveProgram may have just picked the only programme; reload it only in that case
+  const full = ctx.changed
+    ? await prisma.users.findUnique({ where: { id: user.id }, include: { organization: true, activeProgram: true } })
+    : user;
+  const me = await buildMe(full, programs, ctx);
   return { ...tokens, me };
 };
 
@@ -148,12 +160,19 @@ exports.refresh = async (refreshToken) => {
 };
 
 exports.me = async (user) => {
-  await hydrateUserContext(user);
-  const full = await prisma.users.findUnique({
-    where: { id: user.id },
-    include: { organization: true, activeProgram: true },
-  });
-  const programs = await programService.listPrograms(full);
+  const ctx = await hydrateUserContext(user);
+  const [full, programs] = await Promise.all([
+    prisma.users.findUnique({
+      where: { id: user.id },
+      include: { organization: true, activeProgram: true },
+    }),
+    programService.listPrograms(user),
+  ]);
+  return buildMe(full, programs, ctx);
+};
+
+/** Shapes the /me payload from already-loaded rows; ctx is the hydrated role context. */
+async function buildMe(full, programs, ctx) {
   const activeIsArchived = full.activeProgram?.status === "archived";
   if (activeIsArchived && full.activeProgramId) {
     await prisma.users.update({
@@ -183,7 +202,12 @@ exports.me = async (user) => {
               : 5000000,
         }
       : null;
-  const context = activeProgram ? await hydrateUserContext(full) : { cropfortRoles: [] };
+  // The roles were already loaded for this programme; only look again if it differs
+  const context = !activeProgram
+    ? { cropfortRoles: [] }
+    : ctx && ctx.activeProgramId === full.activeProgramId
+      ? ctx
+      : await hydrateUserContext(full);
   return {
     user: userJson({
       ...full,
@@ -205,7 +229,7 @@ exports.me = async (user) => {
     onboardingComplete: Boolean(full.organization?.displayName),
     mfaEnabled: Boolean(full.totpEnrolledAt),
   };
-};
+}
 
 exports.forgotPassword = async (email) => {
   const user = await prisma.users.findUnique({ where: { email: email.toLowerCase() } });

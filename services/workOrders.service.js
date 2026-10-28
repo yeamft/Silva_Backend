@@ -367,6 +367,71 @@ exports.createWorkOrder = async (user, body) => {
   return serializeWo(created);
 };
 
+/**
+ * Creates and issues many work orders at once (monthly activation): one count for the codes,
+ * one insert for the orders and one for their blocks, instead of ~9 round trips per order.
+ * Blocks no longer on the programme map are dropped rather than failing the order.
+ */
+exports.issueWorkOrdersBatch = async (user, items) => {
+  assertWoWrite(user);
+  if (!hasPerm(user, "work_orders.issue") && !hasPerm(user, "work_orders.full") && !isSpxRole(user.role) && user.role !== "system_admin" && user.role !== "spx_platform_admin") {
+    throw new AppError(403, "FORBIDDEN", "Insufficient permissions to issue work orders");
+  }
+  const programId = requireProgramId(user);
+  if (!items.length) return [];
+
+  const blockIds = [...new Set(items.map((i) => i.blockId).filter(Boolean))];
+  const [count, validBlocks] = await Promise.all([
+    prisma.work_orders.count({ where: { programId } }),
+    blockIds.length
+      ? prisma.farm_blocks.findMany({ where: { id: { in: blockIds }, programId }, select: { id: true } })
+      : [],
+  ]);
+  const blockOk = new Set(validBlocks.map((b) => b.id));
+  const year = new Date().getFullYear().toString().slice(-2);
+  const now = new Date();
+
+  const rows = items.map((item, index) => ({
+    id: uuid("wo"),
+    programId,
+    code: `WO-${year}${String(count + index + 1).padStart(4, "0")}`,
+    title: String(item.title || item.activity),
+    category: String(item.category || "Core Operations"),
+    activity: String(item.activity || item.title),
+    tier: item.tier || "retainer",
+    weekStart: item.weekStart,
+    weekEnd: item.weekEnd ?? item.weekStart,
+    plannedCostEtb: dec(item.plannedCostEtb),
+    farmEstateId: item.farmEstateId || null,
+    instructions: item.instructions != null ? String(item.instructions) : null,
+    assignedVendorId: item.assignedVendorId || null,
+    status: "issued",
+    updatedAt: now,
+  }));
+  await prisma.work_orders.createMany({ data: rows });
+  const assignments = rows
+    .map((row, index) => ({ row, blockId: items[index].blockId }))
+    .filter(({ blockId }) => blockId && blockOk.has(blockId))
+    .map(({ row, blockId }) => ({ id: uuid("wob"), workOrderId: row.id, blockId }));
+  if (assignments.length) await prisma.work_order_block_assignments.createMany({ data: assignments });
+
+  void prisma.audit_log
+    .createMany({
+      data: rows.map((row) => ({
+        id: uuid("aud"),
+        programId,
+        userId: user.id,
+        entityType: "work_order",
+        entityId: row.id,
+        action: "work_order.issued",
+        newValue: { code: row.code, status: "issued" },
+      })),
+    })
+    .catch((err) => console.error("[audit] batch write failed:", err?.message || err));
+
+  return rows;
+};
+
 exports.updateWorkOrder = async (user, id, body) => {
   assertWoWrite(user);
   const existing = await loadWo(user, id);

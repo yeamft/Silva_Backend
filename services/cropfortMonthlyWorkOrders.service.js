@@ -4,6 +4,7 @@ const { uuid } = require("../utils/ids");
 const { permissionsFor, isSpxRole, isSilvaRole, isVendorRole, isAssetOwnerApprover } = require("../utils/roles");
 const { Prisma } = require("@prisma/client");
 const workOrders = require("./workOrders.service");
+const notifications = require("./notifications.service");
 
 function requireProgramId(user) {
   if (!user.activeProgramId) {
@@ -317,32 +318,33 @@ exports.activateMonthlyWorkOrder = async (user, id) => {
   }
 
   const programId = existing.programId;
-  const vendorLink = existing.farmId
-    ? await prisma.farm_estate_vendors.findFirst({
-        where: { farmEstateId: existing.farmId },
-        orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
-        select: { vendorId: true },
-      })
-    : null;
   const { weekStart, weekEnd } = monthWeeks(existing.ethiopianMonth, existing.yearGc);
   const monthLabel = `${EC_MONTH_NAME[existing.ethiopianMonth] || existing.ethiopianMonth} ${existing.yearGc}`;
 
   const lines = (existing.lines || []).filter((l) => num(l.etb) > 0 || num(l.plannedQty) > 0);
   const titleFor = (l) => [l.activityName, l.blockCode, monthLabel].filter(Boolean).join(" · ");
-  const already = await prisma.work_orders.findMany({
-    where: { programId, title: { in: lines.map(titleFor) } },
-    select: { title: true },
-  });
+  // The vendor and the already-issued check are independent reads: run them together
+  const [vendorLink, already] = await Promise.all([
+    existing.farmId
+      ? prisma.farm_estate_vendors.findFirst({
+          where: { farmEstateId: existing.farmId },
+          orderBy: [{ isPrimary: "desc" }, { createdAt: "asc" }],
+          select: { vendorId: true },
+        })
+      : null,
+    prisma.work_orders.findMany({
+      where: { programId, title: { in: lines.map(titleFor) } },
+      select: { title: true },
+    }),
+  ]);
   const done = new Set(already.map((w) => w.title));
 
-  let issued = 0;
   const heldBack = [];
-  // Codes come from a running count, so orders are created one after another…
-  const createdOrders = [];
+  const items = [];
   for (const line of lines) {
     const title = titleFor(line);
     if (done.has(title)) continue;
-    const payload = {
+    items.push({
       title,
       activity: line.activityName,
       plannedCostEtb: num(line.etb),
@@ -355,25 +357,20 @@ exports.activateMonthlyWorkOrder = async (user, id) => {
           .filter(Boolean)
           .join(" · "),
       blockId: line.blockId || undefined,
-    };
-    let wo;
-    try {
-      wo = await workOrders.createWorkOrder(user, payload);
-    } catch (err) {
-      // Lines can carry a block that has since left the programme map
-      if (!payload.blockId) throw err;
-      wo = await workOrders.createWorkOrder(user, { ...payload, blockId: undefined });
-    }
-    createdOrders.push(wo);
+    });
   }
-  // …then all of them are issued together
-  const results = await Promise.allSettled(
-    createdOrders.map((wo) => workOrders.transitionWorkOrder(user, wo.id, { status: "issued" })),
-  );
-  results.forEach((r, i) => {
-    if (r.status === "fulfilled") issued += 1;
-    else heldBack.push(`${createdOrders[i].code}: ${r.reason?.message || "could not issue"}`);
-  });
+  // All of the month's work orders are created and issued in a few batched writes
+  const created = await workOrders.issueWorkOrdersBatch(user, items);
+  const issued = created.length;
+  if (issued) {
+    void notifications.notifyWorkOrdersIssued(programId, {
+      count: issued,
+      monthLabel,
+      monthlyCode: existing.code,
+      firstWorkOrderId: created[0].id,
+      assignedVendorId: vendorLink?.vendorId || null,
+    });
+  }
 
   const now = new Date();
   const summary = `Issued ${issued} work order${issued === 1 ? "" : "s"}${

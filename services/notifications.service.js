@@ -523,6 +523,20 @@ async function notifyWorkOrderIssued(programId, wo) {
   });
 }
 
+/** One notice for a whole month's activation, instead of one per work order. */
+async function notifyWorkOrdersIssued(programId, { count, monthLabel, monthlyCode, firstWorkOrderId, assignedVendorId }) {
+  const vendors = await findVendorUsers(assignedVendorId);
+  return notifyRolesOrUsers({
+    programId,
+    triggerType: "work_order.issued",
+    entityType: "work_order",
+    entityId: firstWorkOrderId,
+    message: `${count} work order${count === 1 ? "" : "s"} issued for ${monthLabel}${monthlyCode ? ` (${monthlyCode})` : ""}`,
+    roles: ["vendor_admin", "vendor_manager", "vendor_supervisor", "vendor_field_lead", "field_supervisor"],
+    extraRecipients: vendors,
+  });
+}
+
 /** Tells the SPX desk a vendor finished a work order — or couldn't, with the reason. */
 async function notifyWorkOrderVendorReport(programId, wo, outcome, note, actorName) {
   const label = wo.code || wo.title || wo.activity || wo.id;
@@ -832,6 +846,7 @@ const exported = {
   notifyRateCardProposalDecision,
   notifyBenchmarkSurveySubmitted,
   notifyWorkOrderIssued,
+  notifyWorkOrdersIssued,
   notifyWorkOrderVendorReport,
   notifyWorkOrderReviewed,
   notifyFieldTicketStatus,

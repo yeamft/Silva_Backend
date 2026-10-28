@@ -279,7 +279,10 @@ function lineJson(line) {
 }
 
 function planJson(plan) {
-  const lines = (plan.lines || []).slice().sort((a, b) => a.sortOrder - b.sortOrder || a.activityCode.localeCompare(b.activityCode));
+  // The list view loads only a few line fields, so sortOrder / activityCode may be missing
+  const lines = (plan.lines || [])
+    .slice()
+    .sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || String(a.activityCode ?? "").localeCompare(String(b.activityCode ?? "")));
   const activities = {};
   const activityIds = [];
   for (const line of lines) {
@@ -549,6 +552,11 @@ exports.getPlan = async (user, planId) => {
 
 exports.upsertPlan = async (user, planId, body) => {
   const plan = await loadPlanScoped(user, planId);
+  return planJson(await applyPlanEdits(user, plan, body));
+};
+
+/** Saves an edit onto an already-loaded plan and returns the updated row (with lines). */
+async function applyPlanEdits(user, plan, body) {
   if (plan.status === "archived" || plan.status === "closed") {
     throw new AppError(409, "INVALID_STATE_TRANSITION", "Archived or closed plans are read-only");
   }
@@ -568,15 +576,25 @@ exports.upsertPlan = async (user, planId, body) => {
   if (body.programBandSetId !== undefined) meta.programBandSetId = body.programBandSetId;
   if (body.totalHa != null) meta.totalHa = dec(body.totalHa, 2);
   if (body.annualPlanData !== undefined) meta.annualPlanData = body.annualPlanData;
-  if (Array.isArray(body.applicableBlockIds)) {
-    const blocks = await prisma.farm_blocks.findMany({
-      where: {
-        id: { in: body.applicableBlockIds },
-        programId: plan.programId,
-        farmEstateId: plan.farmEstateId,
-      },
-      select: { id: true },
-    });
+  const incomingLines = Array.isArray(body.lines) ? body.lines : Array.isArray(body.activities) ? Object.values(body.activities) : null;
+  const activityIds = incomingLines
+    ? [...new Set(incomingLines.map((l) => String(l.activityId || "").trim()).filter(Boolean))]
+    : [];
+  // Both checks are independent reads: run them together, before the transaction opens
+  const [blocks, activities] = await Promise.all([
+    Array.isArray(body.applicableBlockIds)
+      ? prisma.farm_blocks.findMany({
+          where: {
+            id: { in: body.applicableBlockIds },
+            programId: plan.programId,
+            farmEstateId: plan.farmEstateId,
+          },
+          select: { id: true },
+        })
+      : null,
+    activityIds.length ? prisma.activities.findMany({ where: { id: { in: activityIds } } }) : [],
+  ]);
+  if (blocks) {
     if (blocks.length !== body.applicableBlockIds.length) {
       throw new AppError(400, "VALIDATION_ERROR", "One or more blocks do not belong to this farm estate");
     }
@@ -588,12 +606,8 @@ exports.upsertPlan = async (user, planId, body) => {
     meta.status = "draft";
   }
 
-  const incomingLines = Array.isArray(body.lines) ? body.lines : Array.isArray(body.activities) ? Object.values(body.activities) : null;
-
   const updated = await prisma.$transaction(async (tx) => {
     if (incomingLines) {
-      const activityIds = [...new Set(incomingLines.map((l) => String(l.activityId || "").trim()).filter(Boolean))];
-      const activities = await tx.activities.findMany({ where: { id: { in: activityIds } } });
       const byId = new Map(activities.map((a) => [a.id, a]));
       for (const aid of activityIds) {
         if (!byId.has(aid)) throw new AppError(400, "VALIDATION_ERROR", `Unknown activity ${aid}`);
@@ -682,8 +696,8 @@ exports.upsertPlan = async (user, planId, body) => {
     after: { status: updated.status, plannedCostEtb: num(updated.plannedCostEtb) },
   });
 
-  return planJson(updated);
-};
+  return updated;
+}
 
 exports.patchSchedule = async (user, planId, body) => {
   const plan = await loadPlanScoped(user, planId);
@@ -788,14 +802,12 @@ exports.submitPlan = async (user, planId, body = {}) => {
   // The editor sends the whole plan with the submit so details, activities and schedule are saved
   // together with it — never a stale server copy.
   const { status: _ignored, ...incoming } = body || {};
-  if (Object.keys(incoming).length) {
-    const current = await loadPlanScoped(user, planId);
-    if (!SUBMITTABLE.has(current.status)) {
-      throw new AppError(409, "INVALID_STATE_TRANSITION", `Cannot submit from ${current.status}`);
-    }
-    await exports.upsertPlan(user, planId, incoming);
+  const current = await loadPlanScoped(user, planId);
+  if (!SUBMITTABLE.has(current.status)) {
+    throw new AppError(409, "INVALID_STATE_TRANSITION", `Cannot submit from ${current.status}`);
   }
-  const plan = await loadPlanScoped(user, planId);
+  // The save returns the fresh row with its lines, so there is no need to load the plan again
+  const plan = Object.keys(incoming).length ? await applyPlanEdits(user, current, incoming) : current;
   if (!SUBMITTABLE.has(plan.status)) {
     throw new AppError(409, "INVALID_STATE_TRANSITION", `Cannot submit from ${plan.status}`);
   }
@@ -956,10 +968,21 @@ exports.listPlans = async (user, { farmEstateId, planYear, status, q, includeArc
     ];
   }
 
+  // Don't load all lines for a list — use counts only; lines are fetched on getPlan
   const rows = await prisma.cropfort_programme_plans.findMany({
     where,
     include: {
-      lines: true,
+      lines: {
+        select: {
+          id: true,
+          included: true,
+          rateStatus: true,
+          unitRateEtb: true,
+          plannedQty: true,
+          intensities: true,
+          plannedCostEtb: true,
+        },
+      },
       farm_estates: { select: { id: true, name: true } },
       programs: true,
     },
