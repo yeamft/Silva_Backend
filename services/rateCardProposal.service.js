@@ -174,6 +174,20 @@ async function promoteToStanding(row, userId) {
     });
     const wage =
       norm != null && norm > 0 && proposed != null ? Math.round((proposed / norm) * 100) / 100 : null;
+    // The database keeps one labour card per farm + activity, so a re-publish updates it in place
+    if (existing) {
+      await prisma.labor_rate_cards.update({
+        where: { id: existing.id },
+        data: {
+          normMandayPerUnit: norm,
+          wageRatePerManday: wage,
+          status: "approved",
+          version: (existing.version ?? 0) + 1,
+          updatedAt: new Date(),
+        },
+      });
+      return;
+    }
     await prisma.labor_rate_cards.create({
       data: {
         id: uuid("lrc"),

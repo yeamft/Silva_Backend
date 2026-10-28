@@ -81,6 +81,25 @@ exports.createLabor = async (user, farmId, input) => {
   if (norm == null || wage == null || norm < 0 || wage < 0) {
     throw new AppError(400, "VALIDATION_ERROR", "normMandayPerUnit and wageRatePerManday are required");
   }
+  // One labour card per farm + activity: adding one that exists updates it instead
+  const existing = await prisma.labor_rate_cards.findFirst({
+    where: { farmEstateId: farm.id, activityId },
+    orderBy: { version: "desc" },
+  });
+  if (existing) {
+    const updated = await prisma.labor_rate_cards.update({
+      where: { id: existing.id },
+      data: {
+        normMandayPerUnit: norm,
+        wageRatePerManday: wage,
+        status: "approved",
+        version: (existing.version ?? 0) + 1,
+        updatedAt: new Date(),
+      },
+      include: activityInclude,
+    });
+    return serializeLabor(updated);
+  }
   const created = await prisma.labor_rate_cards.create({
     data: {
       id: uuid("lrc"),

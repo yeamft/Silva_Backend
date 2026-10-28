@@ -2250,6 +2250,10 @@ model work_orders {
   assignedVendorId             String?
   activityCatalogId            String?
   status                       WorkOrderStatus                @default(draft)
+  /// Vendor's report on an issued order: "done" or "not_done" (with vendorNote)
+  vendorOutcome                String?
+  vendorNote                   String?
+  vendorReportedAt             DateTime?
   createdAt                    DateTime                       @default(now())
   updatedAt                    DateTime
   field_tickets                field_tickets[]

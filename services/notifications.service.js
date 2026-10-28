@@ -76,7 +76,7 @@ function hrefFor(row) {
     return `/cropfort/rate-cards/benchmark-surveys/${row.entityId}`;
   }
   if (row.entityType === "work_order") {
-    return "/cropfort/work-orders";
+    return row.triggerType === "work_order.completed" ? "/cropfort/work-orders?view=review" : "/cropfort/work-orders";
   }
   if (row.entityType === "field_ticket") {
     return "/cropfort/validation-queue";
@@ -523,6 +523,42 @@ async function notifyWorkOrderIssued(programId, wo) {
   });
 }
 
+/** Tells the SPX desk a vendor finished a work order — or couldn't, with the reason. */
+async function notifyWorkOrderVendorReport(programId, wo, outcome, note, actorName) {
+  const label = wo.code || wo.title || wo.activity || wo.id;
+  const who = actorName || wo.vendorName || "The vendor";
+  const message =
+    outcome === "done"
+      ? `${who} sent work order ${label}${wo.title ? ` — ${wo.title}` : ""} for review`
+      : `${who} marked work order ${label} as not done: ${note}`;
+  return notifyRoleBroadcast({
+    programId,
+    triggerType: outcome === "done" ? "work_order.completed" : "work_order.not_done",
+    entityType: "work_order",
+    entityId: wo.id,
+    message,
+    roles: SPX_VALIDATOR_ROLES,
+  });
+}
+
+/** Tells the vendor SPX approved its work, or returned it with what to fix. */
+async function notifyWorkOrderReviewed(programId, wo, decision, comment, actorName) {
+  const label = wo.code || wo.title || wo.id;
+  const message =
+    decision === "approve"
+      ? `${actorName || "SPX"} approved work order ${label}`
+      : `${actorName || "SPX"} returned work order ${label}: ${comment}`;
+  return notifyRolesOrUsers({
+    programId,
+    triggerType: decision === "approve" ? "work_order.approved" : "work_order.returned",
+    entityType: "work_order",
+    entityId: wo.id,
+    message,
+    roles: ["vendor_admin", "vendor_manager", "vendor_supervisor", "vendor_field_lead"],
+    extraRecipients: await findVendorUsers(wo.assignedVendorId),
+  });
+}
+
 async function notifyFieldTicketStatus(programId, ticket, nextStatus, actorName) {
   const shortId = String(ticket.id || "").slice(0, 10).toUpperCase();
   const activity = ticket.activityRecorded || "field ticket";
@@ -774,7 +810,17 @@ async function notifyFarmAssessment(plan, assessment, action, actorName, db = pr
   })) });
 }
 
-module.exports = {
+/** Runs a notify* function in the background: the caller's request doesn't wait for it. */
+function inBackground(name, fn) {
+  return (...args) => {
+    Promise.resolve()
+      .then(() => fn(...args))
+      .catch((err) => console.error(`[notifications] ${name} failed:`, err?.message || err));
+    return Promise.resolve();
+  };
+}
+
+const exported = {
   notifyFarmAssessment,
   listForUser,
   acknowledge,
@@ -786,6 +832,8 @@ module.exports = {
   notifyRateCardProposalDecision,
   notifyBenchmarkSurveySubmitted,
   notifyWorkOrderIssued,
+  notifyWorkOrderVendorReport,
+  notifyWorkOrderReviewed,
   notifyFieldTicketStatus,
   notifyAfeSubmitted,
   notifyAfeDecision,
@@ -799,3 +847,7 @@ module.exports = {
   notifyReportSubmitted,
   notifyReportDecision,
 };
+
+module.exports = Object.fromEntries(
+  Object.entries(exported).map(([name, fn]) => [name, name.startsWith("notify") ? inBackground(name, fn) : fn]),
+);

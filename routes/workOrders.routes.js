@@ -14,6 +14,8 @@ router.post("/tickets/:ticketId/transition", validate(schemas.fieldTicketTransit
 router.get("/:id", ctrl.get);
 router.patch("/:id", validate(schemas.workOrderUpdate), ctrl.update);
 router.post("/:id/transition", validate(schemas.workOrderTransition), ctrl.transition);
+router.post("/:id/vendor-report", validate(schemas.workOrderVendorReport), ctrl.vendorReport);
+router.post("/:id/review", validate(schemas.workOrderReview), ctrl.review);
 router.get("/:id/tickets", ctrl.listTickets);
 router.post("/:id/tickets", validate(schemas.fieldTicketCreate), ctrl.createTicket);
 

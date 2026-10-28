@@ -26,7 +26,8 @@ app.use(
     crossOriginResourcePolicy: { policy: "cross-origin" },
   }),
 );
-app.use(compression());
+// Server push streams must not be buffered by compression
+app.use(compression({ filter: (req, res) => !req.path.startsWith("/api/v1/events") && compression.filter(req, res) }));
 app.use(express.json({ limit: "2mb" }));
 app.use(requestId);
 
@@ -71,6 +72,7 @@ app.use("/api/v1/programme-plans", require("./routes/programmePlans.routes"));
 app.use("/api/v1/farm-assessments", require("./routes/farmAssessments.routes"));
 app.use("/api/v1/annual-plan-benchmarks", require("./routes/annualPlanBenchmarks.routes"));
 app.use("/api/v1/work-orders", require("./routes/workOrders.routes"));
+app.use("/api/v1/events", require("./routes/events.routes"));
 app.use("/api/v1/afes", require("./routes/cropfortAfes.routes"));
 app.use("/api/v1/weekly-plans", require("./routes/cropfortWeeklyPlans.routes"));
 app.use("/api/v1/monthly-work-orders", require("./routes/cropfortMonthlyWorkOrders.routes"));

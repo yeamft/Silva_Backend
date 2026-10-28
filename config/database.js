@@ -3,6 +3,7 @@ require("dotenv").config();
 const { PrismaClient } = require("@prisma/client");
 const { withPrismaConnectionLimit } = require("./prisma-connection-url");
 const authContextCache = require("../utils/authContextCache");
+const realtime = require("../utils/realtime");
 
 /** Reuse one client across nodemon reloads when possible. */
 const globalForPrisma = globalThis;
@@ -43,6 +44,8 @@ function createClient() {
           if (AUTH_CONTEXT_MODELS.has(model) && WRITE_OPERATIONS.has(operation)) {
             authContextCache.clear();
           }
+          // Tell open screens this programme's data changed (server push)
+          if (WRITE_OPERATIONS.has(operation)) realtime.announce(model, args, result);
           return result;
         },
       },

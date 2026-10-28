@@ -337,6 +337,8 @@ exports.activateMonthlyWorkOrder = async (user, id) => {
 
   let issued = 0;
   const heldBack = [];
+  // Codes come from a running count, so orders are created one after another…
+  const createdOrders = [];
   for (const line of lines) {
     const title = titleFor(line);
     if (done.has(title)) continue;
@@ -362,14 +364,16 @@ exports.activateMonthlyWorkOrder = async (user, id) => {
       if (!payload.blockId) throw err;
       wo = await workOrders.createWorkOrder(user, { ...payload, blockId: undefined });
     }
-    try {
-      await workOrders.transitionWorkOrder(user, wo.id, { status: "issued" });
-      issued += 1;
-    } catch (err) {
-      // e.g. the vendor's insurance isn't on file — the order waits as a draft
-      heldBack.push(`${wo.code}: ${err?.message || "could not issue"}`);
-    }
+    createdOrders.push(wo);
   }
+  // …then all of them are issued together
+  const results = await Promise.allSettled(
+    createdOrders.map((wo) => workOrders.transitionWorkOrder(user, wo.id, { status: "issued" })),
+  );
+  results.forEach((r, i) => {
+    if (r.status === "fulfilled") issued += 1;
+    else heldBack.push(`${createdOrders[i].code}: ${r.reason?.message || "could not issue"}`);
+  });
 
   const now = new Date();
   const summary = `Issued ${issued} work order${issued === 1 ? "" : "s"}${

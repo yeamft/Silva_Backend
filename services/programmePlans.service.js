@@ -7,6 +7,9 @@ const { isAssetOwnerApprover } = require("../utils/roles");
 const { Prisma } = require("@prisma/client");
 const notifications = require("./notifications.service");
 
+// The database is remote, so give multi-step transactions room beyond Prisma's 5 s default
+const TX_OPTIONS = { maxWait: 10_000, timeout: 30_000 };
+
 const PLAN_MONTHS = [
   "oct",
   "nov",
@@ -22,46 +25,75 @@ const PLAN_MONTHS = [
   "sep",
 ];
 
-/** A plan covers the whole year or one half of it. */
-const PLAN_PERIODS = {
-  annual: { months: PLAN_MONTHS, label: "Full year" },
-  first_half: { months: PLAN_MONTHS.slice(0, 6), label: "Tikimt–Megabit" },
-  second_half: { months: PLAN_MONTHS.slice(6), label: "Miyazya–Meskerem" },
+/** English month names in budget-year order, matching PLAN_MONTHS. */
+const MONTH_NAMES = {
+  oct: "Oct", nov: "Nov", dec: "Dec", jan: "Jan", feb: "Feb", mar: "Mar",
+  apr: "Apr", may: "May", jun: "Jun", jul: "Jul", aug: "Aug", sep: "Sep",
 };
+const SIX_MONTHS = 6;
 
+/**
+ * A plan covers the whole year ("annual") or any six of its months ("months:oct,nov,…").
+ * Older plans may still hold the fixed halves "first_half" / "second_half".
+ */
+function periodMonths(period) {
+  if (!period || period === "annual") return PLAN_MONTHS;
+  if (period === "first_half") return PLAN_MONTHS.slice(0, 6);
+  if (period === "second_half") return PLAN_MONTHS.slice(6);
+  if (String(period).startsWith("months:")) {
+    const set = new Set(String(period).slice(7).split(","));
+    const months = PLAN_MONTHS.filter((m) => set.has(m));
+    if (months.length) return months;
+  }
+  return PLAN_MONTHS;
+}
+
+function periodLabel(period) {
+  const months = periodMonths(period);
+  if (months.length === PLAN_MONTHS.length) return "Full year";
+  const idx = months.map((m) => PLAN_MONTHS.indexOf(m));
+  const consecutive = idx.every((v, i) => i === 0 || v === idx[i - 1] + 1);
+  const names = months.map((m) => MONTH_NAMES[m]);
+  return consecutive ? `${names[0]}–${names[names.length - 1]}` : names.join(", ");
+}
+
+/** Normalises the requested period; six-month plans must name exactly six months. */
 function resolvePeriod(value) {
   const period = value || "annual";
-  if (!PLAN_PERIODS[period]) {
-    throw new AppError(400, "VALIDATION_ERROR", "planPeriod must be annual, first_half or second_half");
+  if (period === "annual" || period === "first_half" || period === "second_half") return period;
+  if (String(period).startsWith("months:")) {
+    const requested = String(period).slice(7).split(",").map((m) => m.trim()).filter(Boolean);
+    const months = PLAN_MONTHS.filter((m) => requested.includes(m));
+    if (months.length === requested.length && new Set(requested).size === requested.length) {
+      if (months.length === PLAN_MONTHS.length) return "annual";
+      if (months.length === SIX_MONTHS) return `months:${months.join(",")}`;
+    }
   }
-  return period;
+  throw new AppError(400, "VALIDATION_ERROR", "planPeriod must be annual or six months, e.g. months:oct,nov,dec,jan,feb,mar");
 }
 
 /** Months outside the plan's period can't be scheduled. */
 function clampToPeriod(intensities, period) {
-  const allowed = new Set((PLAN_PERIODS[period] || PLAN_PERIODS.annual).months);
+  const allowed = new Set(periodMonths(period));
   const out = { ...intensities };
   for (const m of PLAN_MONTHS) if (!allowed.has(m)) out[m] = "none";
   return out;
 }
 
 /** A live plan already covering any of the same months for this farm area and year. */
-function findOverlappingLivePlan({ programId, farmEstateId, planYear, planPeriod }) {
-  return prisma.cropfort_programme_plans.findFirst({
-    where: {
-      programId,
-      farmEstateId,
-      planYear,
-      status: { not: "archived" },
-      ...(planPeriod === "annual" ? {} : { planPeriod: { in: [planPeriod, "annual"] } }),
-    },
+async function findOverlappingLivePlan({ programId, farmEstateId, planYear, planPeriod }) {
+  const live = await prisma.cropfort_programme_plans.findMany({
+    where: { programId, farmEstateId, planYear, status: { not: "archived" } },
     select: { name: true, planPeriod: true },
   });
+  const wanted = new Set(periodMonths(planPeriod));
+  return live.find((p) => periodMonths(p.planPeriod).some((m) => wanted.has(m))) || null;
 }
 
 function overlapMessage(live, planYear) {
-  const covers = live.planPeriod === "annual" ? "the full year" : PLAN_PERIODS[live.planPeriod]?.label;
-  return `"${live.name}" already covers ${covers} of ${planYear} for this farm. Archive it first, or plan a different period.`;
+  const label = periodLabel(live.planPeriod);
+  const covers = label === "Full year" ? "the full year" : label;
+  return `"${live.name}" already covers ${covers} of ${planYear} for this farm. Archive it first, or plan different months.`;
 }
 
 const EDITABLE = new Set(["draft", "returned", "ready_for_review"]);
@@ -173,7 +205,9 @@ function makePlanCode() {
 }
 
 async function recordAudit({ actorId, programId, entityId, action, before, after }) {
-  await prisma.audit_log.create({
+  // Recorded in the background so the request doesn't wait on it
+  void prisma.audit_log
+    .create({
     data: {
       id: uuid("aud"),
       programId: programId || null,
@@ -184,7 +218,8 @@ async function recordAudit({ actorId, programId, entityId, action, before, after
       oldValue: before ?? undefined,
       newValue: after ?? undefined,
     },
-  });
+    })
+    .catch((err) => console.error("[audit] write failed:", err?.message || err));
 }
 
 function resolveBandFromProgram(program, costEtb) {
@@ -421,7 +456,7 @@ exports.createPlan = async (user, body) => {
   const planPeriod = resolvePeriod(body.planPeriod);
   const planningCycleLabel =
     String(body.planningCycleLabel || "").trim() ||
-    (planPeriod === "annual" ? `${year} Programme` : `${year} Programme · ${PLAN_PERIODS[planPeriod].label}`);
+    (planPeriod === "annual" ? `${year} Programme` : `${year} Programme · ${periodLabel(planPeriod)}`);
 
   // Archived plans don't hold the period — a new plan can replace them.
   const existing = await findOverlappingLivePlan({ programId, farmEstateId: farm.id, planYear: year, planPeriod });
@@ -568,6 +603,8 @@ exports.upsertPlan = async (user, planId, body) => {
 
       let total = 0;
       let sortOrder = 0;
+      // Lines are written in one batch: one round trip instead of one per line
+      const lineRows = [];
       for (const raw of incomingLines) {
         const activity = byId.get(String(raw.activityId));
         const qty = Math.max(0, Number(raw.plannedQty) || 0);
@@ -585,8 +622,7 @@ exports.upsertPlan = async (user, planId, body) => {
           : { cost: 0, rateStatus: rate != null ? "VALID" : "MISSING" };
         if (included) total += cost;
         const intensities = clampToPeriod(normalizeIntensities(raw.intensities), plan.planPeriod);
-        await tx.cropfort_programme_plan_lines.create({
-          data: {
+        lineRows.push({
             id: String(raw.id || "").startsWith("pline_") || String(raw.id || "").startsWith("copact_")
               ? String(raw.id)
               : uuid("pline"),
@@ -617,9 +653,9 @@ exports.upsertPlan = async (user, planId, body) => {
             serviceType: String(raw.serviceType || "core_ops"),
             notes: raw.notes != null ? String(raw.notes) : null,
             sortOrder: sortOrder++,
-          },
         });
       }
+      if (lineRows.length) await tx.cropfort_programme_plan_lines.createMany({ data: lineRows });
       const bandInfo = resolveBandFromProgram(plan.programs, total);
       meta.plannedCostEtb = dec(total, 2);
       meta.resolvedBand = bandInfo.band;
@@ -635,7 +671,7 @@ exports.upsertPlan = async (user, planId, body) => {
         programs: true,
       },
     });
-  });
+  }, TX_OPTIONS);
 
   await recordAudit({
     actorId: user.id,
@@ -685,7 +721,7 @@ exports.patchSchedule = async (user, planId, body) => {
         data: { status: "draft" },
       });
     }
-  });
+  }, TX_OPTIONS);
 
   const fresh = await loadPlanScoped(user, planId);
   await recordAudit({
@@ -1004,7 +1040,7 @@ exports.duplicatePlan = async (user, planId) => {
         programs: true,
       },
     });
-  });
+  }, TX_OPTIONS);
 
   await recordAudit({
     actorId: user.id,

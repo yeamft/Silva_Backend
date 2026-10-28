@@ -287,7 +287,8 @@ const programmePlanCreate = z.object({
   name: z.string().min(1),
   farmEstateId: z.string().min(1),
   planYear: z.number().int().min(2000).max(2100),
-  planPeriod: z.enum(["annual", "first_half", "second_half"]).optional(),
+  // "annual" or six months as "months:oct,nov,…" (checked in the service); old halves still accepted
+  planPeriod: z.string().max(80).optional(),
   planningCycleLabel: z.string().optional(),
   budgetYearLabel: z.string().optional(),
   description: z.string().optional(),
@@ -543,6 +544,16 @@ const workOrderTransition = z.object({
   status: z.enum(["draft", "issued", "in_progress", "complete", "closed"]),
 });
 
+const workOrderVendorReport = z.object({
+  outcome: z.enum(["done", "not_done"]),
+  note: z.string().max(2000).optional(),
+});
+
+const workOrderReview = z.object({
+  decision: z.enum(["approve", "return"]),
+  comment: z.string().max(2000).optional(),
+});
+
 const fieldTicketCreate = z.object({
   activityRecorded: z.string().optional(),
   areaHa: z.number().finite().nonnegative().optional(),
@@ -652,6 +663,8 @@ module.exports = {
   workOrderCreate,
   workOrderUpdate,
   workOrderTransition,
+  workOrderVendorReport,
+  workOrderReview,
   fieldTicketCreate,
   fieldTicketTransition,
   projectCreate,

@@ -22,6 +22,14 @@ exports.update = catchAsync(async (req, res) => {
   res.json({ data: await service.updateWorkOrder(req.user, req.params.id, req.validatedBody) });
 });
 
+exports.review = catchAsync(async (req, res) => {
+  res.json({ data: await service.reviewWorkOrder(req.user, req.params.id, req.validatedBody) });
+});
+
+exports.vendorReport = catchAsync(async (req, res) => {
+  res.json({ data: await service.reportVendorOutcome(req.user, req.params.id, req.validatedBody) });
+});
+
 exports.transition = catchAsync(async (req, res) => {
   res.json({ data: await service.transitionWorkOrder(req.user, req.params.id, req.validatedBody) });
 });
