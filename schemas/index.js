@@ -253,6 +253,7 @@ const programmePlanLine = z.object({
   scope: z.enum(["block", "off_block"]).optional(),
   included: z.boolean().optional(),
   plannedQty: z.number().finite().nonnegative().optional(),
+  frequency: z.number().finite().positive().optional(),
   unitRateEtb: z.number().finite().nonnegative().nullable().optional(),
   rateCardId: z.string().nullable().optional(),
   rateSource: z.string().nullable().optional(),

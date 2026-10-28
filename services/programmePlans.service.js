@@ -210,6 +210,7 @@ function resolveBandFromProgram(program, costEtb) {
 function lineJson(line) {
   const intensities = normalizeIntensities(line.intensities);
   const qty = num(line.plannedQty) ?? 0;
+  const frequency = num(line.frequency) || 1;
   const rate = num(line.unitRateEtb);
   return {
     id: line.id,
@@ -221,6 +222,7 @@ function lineJson(line) {
     scope: line.scope === "off_block" ? "off_block" : "block",
     included: Boolean(line.included),
     plannedQty: qty,
+    frequency,
     blockAllocations: Array.isArray(line.blockAllocations) ? line.blockAllocations : [],
     agreedRate:
       rate != null
@@ -569,6 +571,8 @@ exports.upsertPlan = async (user, planId, body) => {
       for (const raw of incomingLines) {
         const activity = byId.get(String(raw.activityId));
         const qty = Math.max(0, Number(raw.plannedQty) || 0);
+        // Frequency per year is a planning assumption on the line: cost = qty × frequency × rate
+        const frequency = Number(raw.frequency) > 0 ? Number(raw.frequency) : 1;
         const rate =
           raw.agreedRate?.unitRateEtb != null
             ? Number(raw.agreedRate.unitRateEtb)
@@ -577,7 +581,7 @@ exports.upsertPlan = async (user, planId, body) => {
               : null;
         const included = Boolean(raw.included);
         const { cost, rateStatus } = included
-          ? computeLineCost(qty, rate)
+          ? computeLineCost(qty * frequency, rate)
           : { cost: 0, rateStatus: rate != null ? "VALID" : "MISSING" };
         if (included) total += cost;
         const intensities = clampToPeriod(normalizeIntensities(raw.intensities), plan.planPeriod);
@@ -595,6 +599,7 @@ exports.upsertPlan = async (user, planId, body) => {
             scope: raw.scope === "off_block" ? "off_block" : "block",
             included,
             plannedQty: dec(qty, 4),
+            frequency: dec(frequency, 2),
             unitRateEtb: rate != null ? dec(rate, 4) : null,
             normMdPerUnit:
               raw.agreedRate?.normMdPerUnit != null
@@ -712,6 +717,7 @@ function submissionSnapshot(plan) {
       uom: l.uom,
       scope: l.scope,
       plannedQty: l.plannedQty,
+      frequency: l.frequency,
       unitRateEtb: l.agreedRate?.unitRateEtb ?? null,
       rateCardId: l.agreedRate?.rateCardId || null,
       plannedCost: l.plannedCost,
@@ -974,6 +980,7 @@ exports.duplicatePlan = async (user, planId) => {
           scope: l.scope || "block",
           included: l.included,
           plannedQty: l.plannedQty,
+          frequency: l.frequency,
           unitRateEtb: l.unitRateEtb,
           rateCardId: l.rateCardId,
           rateSource: l.rateSource,

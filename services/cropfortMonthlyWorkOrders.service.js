@@ -515,7 +515,7 @@ exports.createFromPlan = async (user, planId) => {
       if (!share) continue;
       const totalWeight = PLAN_MONTHS.reduce((s, m) => s + (INTENSITY_SHARE[intensities[m]] || 0), 0) || 1;
       const monthShare = share / totalWeight;
-      const qty = num(line.plannedQty) * monthShare;
+      const qty = num(line.plannedQty) * (num(line.frequency) || 1) * monthShare;
       const cost = num(line.plannedCostEtb) * monthShare;
       if (qty <= 0) continue;
 

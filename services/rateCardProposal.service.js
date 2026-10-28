@@ -21,6 +21,61 @@ function kindFromTier(tier) {
   return null;
 }
 
+/**
+ * Rate scenarios, as in the annual plan template: the industry average from the benchmark,
+ * that average +25% and +50%, and an expert input. The chosen one is the Chaka Buna plan rate.
+ */
+const PLAN_BASES = ["industry_average", "plus_25", "plus_50", "expert_input"];
+const DEFAULT_BANDS = { band1Pct: 25, band2Pct: 50 };
+
+// Band 1 / Band 2 come from the programme's settings (shared with the Annual Budget plan)
+const bandCache = new Map();
+const BAND_TTL_MS = 30_000;
+
+async function loadBands(programId) {
+  if (!programId) return DEFAULT_BANDS;
+  const hit = bandCache.get(programId);
+  if (hit && Date.now() - hit.at < BAND_TTL_MS) return hit.bands;
+  const program = await prisma.programs.findUnique({
+    where: { id: programId },
+    select: { cropfortScenarioBand1Pct: true, cropfortScenarioBand2Pct: true },
+  });
+  const bands = {
+    band1Pct: num(program?.cropfortScenarioBand1Pct) ?? DEFAULT_BANDS.band1Pct,
+    band2Pct: num(program?.cropfortScenarioBand2Pct) ?? DEFAULT_BANDS.band2Pct,
+  };
+  bandCache.set(programId, { bands, at: Date.now() });
+  return bands;
+}
+
+function cachedBands(programId) {
+  return bandCache.get(programId)?.bands ?? DEFAULT_BANDS;
+}
+
+exports.clearBandCache = (programId) => bandCache.delete(programId);
+
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+/** Bands raise the wage per man-day with man-days unchanged, so cost per unit rises by the same %. */
+function scenarioRates(industryRate, expertRate, bands = DEFAULT_BANDS) {
+  const industry = industryRate != null && industryRate > 0 ? industryRate : null;
+  return {
+    industry_average: industry,
+    plus_25: industry != null ? round2(industry * (1 + bands.band1Pct / 100)) : null,
+    plus_50: industry != null ? round2(industry * (1 + bands.band2Pct / 100)) : null,
+    expert_input: expertRate != null ? expertRate : null,
+  };
+}
+
+/** The plan rate for a basis; without an industry rate only the expert input can be used. */
+function resolvePlanRate(basis, industryRate, expertRate, bands = DEFAULT_BANDS) {
+  const scenarios = scenarioRates(industryRate, expertRate, bands);
+  const chosen = PLAN_BASES.includes(basis) && scenarios[basis] != null ? basis : "expert_input";
+  return { planBasis: chosen, rate: scenarios[chosen] };
+}
+
 function varianceFields(proposed, recommended) {
   if (recommended == null || !recommended || !Number.isFinite(proposed)) {
     return { variancePct: null, flagged: false };
@@ -57,6 +112,10 @@ function serialize(row) {
     sourceSurveyId: row.sourceSurveyId || null,
     recommendedRate: recommended,
     proposedRate: proposed,
+    planBasis: row.planBasis || "expert_input",
+    expertRate: num(row.expertRate),
+    scenarios: scenarioRates(recommended, num(row.expertRate), cachedBands(row.programId)),
+    scenarioBands: cachedBands(row.programId),
     variancePct,
     flagged,
     norm: num(row.norm),
@@ -90,6 +149,7 @@ async function getOrThrow(id) {
     include: includeActivity,
   });
   if (!row) throw new AppError(404, "NOT_FOUND", "Rate card not found");
+  await loadBands(row.programId);
   return row;
 }
 
@@ -207,6 +267,7 @@ exports.list = async (user, farmId, query = {}) => {
     include: includeActivity,
     orderBy: [{ updatedAt: "desc" }],
   });
+  await Promise.all([...new Set(rows.map((r) => r.programId))].map(loadBands));
   return rows.map(serialize);
 };
 
@@ -248,6 +309,7 @@ exports.listProgram = async (user, query = {}) => {
     include: includeActivity,
     orderBy: [{ updatedAt: "desc" }],
   });
+  await Promise.all([...new Set(rows.map((r) => r.programId))].map(loadBands));
   return rows.map(serialize);
 };
 
@@ -284,15 +346,24 @@ exports.createFromSurvey = async (user, farmId, input) => {
     throw new AppError(409, "ALREADY_EXISTS", `Rate card ${existing.id} already references this benchmark`);
   }
 
-  const kind = kindFromTier(survey.activity?.tier) || "labor";
+  const kind = KINDS.has(String(input.kind)) ? String(input.kind) : kindFromTier(survey.activity?.tier) || "labor";
   const recommended = num(survey.recommendedRate);
-  const proposed =
-    input.proposedRate != null && input.proposedRate !== ""
-      ? num(input.proposedRate)
-      : num(survey.proposedRate) ?? recommended;
-  if (proposed == null || proposed < 0) {
-    throw new AppError(400, "VALIDATION_ERROR", "Proposed rate must be a non-negative number");
+  const expertRate =
+    input.expertRate != null && input.expertRate !== ""
+      ? num(input.expertRate)
+      : input.proposedRate != null && input.proposedRate !== ""
+        ? num(input.proposedRate)
+        : num(survey.proposedRate) ?? recommended;
+  if (expertRate == null || expertRate < 0) {
+    throw new AppError(400, "VALIDATION_ERROR", "Expert rate must be a non-negative number");
   }
+  // Default to the industry average when the benchmark has one
+  const { planBasis, rate: proposed } = resolvePlanRate(
+    input.planBasis || (recommended ? "industry_average" : "expert_input"),
+    recommended,
+    expertRate,
+    await loadBands(farm.programId),
+  );
 
   const budgetYear = Number(input.budgetYear) || new Date().getFullYear();
   const day = new Date();
@@ -310,6 +381,8 @@ exports.createFromSurvey = async (user, farmId, input) => {
       sourceSurveyId: survey.id,
       recommendedRate: recommended,
       proposedRate: proposed,
+      planBasis,
+      expertRate,
       norm: input.norm != null ? num(input.norm) : null,
       fallbackRate:
         input.fallbackRate != null
@@ -336,21 +409,14 @@ exports.createFromSurvey = async (user, farmId, input) => {
 exports.createImport = async (user, farmId, input) => {
   assertCanEditFarmRates(user);
   const farm = await loadFarmForUser(user, farmId);
+  await loadBands(farm.programId);
   const activityId = String(input.activityId || "").trim();
   const activity = await prisma.activities.findFirst({ where: { id: activityId } });
   if (!activity) throw new AppError(404, "NOT_FOUND", "Activity not found");
 
+  // One activity can be priced with labour, materials and services — each gets its own card
   const kind = String(input.kind || kindFromTier(activity.tier) || "").trim();
   if (!KINDS.has(kind)) throw new AppError(400, "VALIDATION_ERROR", "kind must be labor|materials|services");
-  if (kind === "labor" && activity.tier !== 1) {
-    throw new AppError(400, "VALIDATION_ERROR", "Labor rate cards require a tier 1 activity");
-  }
-  if (kind === "materials" && activity.tier !== 2) {
-    throw new AppError(400, "VALIDATION_ERROR", "Materials rate cards require a tier 2 activity");
-  }
-  if (kind === "services" && activity.tier !== 3) {
-    throw new AppError(400, "VALIDATION_ERROR", "Services rate cards require a tier 3 activity");
-  }
 
   const proposed = num(input.proposedRate);
   if (proposed == null || proposed < 0) {
@@ -371,6 +437,8 @@ exports.createImport = async (user, farmId, input) => {
       sourceSurveyId: null,
       recommendedRate: null,
       proposedRate: proposed,
+      planBasis: "expert_input",
+      expertRate: proposed,
       norm: input.norm != null ? num(input.norm) : null,
       fallbackRate:
         input.fallbackRate != null ? num(input.fallbackRate) : Math.round(proposed * 0.95 * 100) / 100,
@@ -378,6 +446,7 @@ exports.createImport = async (user, farmId, input) => {
       availableFrom: input.availableFrom ? new Date(input.availableFrom) : day,
       availableTo: input.availableTo ? new Date(input.availableTo) : null,
       sourceEvidence: String(input.sourceEvidence || input.sourceBasis || "").trim() || null,
+      justificationNote: String(input.justificationNote || "").trim() || null,
       notes: String(input.notes || "").trim() || null,
       status: "draft",
       createdByUserId: user.id,
@@ -395,10 +464,36 @@ exports.update = async (user, id, input) => {
   assertEditable(row);
 
   const data = { updatedAt: new Date() };
-  if (input.proposedRate !== undefined) {
+  let expertRate = num(row.expertRate);
+  let basis = row.planBasis || "expert_input";
+  let rateTouched = false;
+  if (input.expertRate !== undefined) {
+    const e = num(input.expertRate);
+    if (e == null || e < 0) throw new AppError(400, "VALIDATION_ERROR", "Invalid expert rate");
+    expertRate = e;
+    rateTouched = true;
+  }
+  if (input.planBasis !== undefined) {
+    if (!PLAN_BASES.includes(input.planBasis)) {
+      throw new AppError(400, "VALIDATION_ERROR", "planBasis must be industry_average, plus_25, plus_50 or expert_input");
+    }
+    basis = input.planBasis;
+    rateTouched = true;
+  }
+  if (input.proposedRate !== undefined && !rateTouched) {
+    // Older screens send the rate directly; treat it as the expert input
     const p = num(input.proposedRate);
     if (p == null || p < 0) throw new AppError(400, "VALIDATION_ERROR", "Invalid proposedRate");
-    data.proposedRate = p;
+    expertRate = p;
+    basis = "expert_input";
+    rateTouched = true;
+  }
+  if (rateTouched) {
+    const resolved = resolvePlanRate(basis, num(row.recommendedRate), expertRate, await loadBands(row.programId));
+    if (resolved.rate == null) throw new AppError(400, "VALIDATION_ERROR", "Enter an expert rate");
+    data.expertRate = expertRate;
+    data.planBasis = resolved.planBasis;
+    data.proposedRate = resolved.rate;
   }
   if (input.availableFrom !== undefined) {
     data.availableFrom = input.availableFrom ? new Date(input.availableFrom) : null;
@@ -434,66 +529,52 @@ exports.update = async (user, id, input) => {
   return serialize(updated);
 };
 
+/**
+ * Rate cards have no approval step: finishing a draft publishes it straight away, so plans can
+ * use the rate. (The asset owner approves the plans that use these rates instead.)
+ */
+async function publish(user, row) {
+  if (!row.availableFrom) {
+    throw new AppError(400, "VALIDATION_ERROR", "Effective from date is required before publishing");
+  }
+  const now = new Date();
+  const updated = await prisma.rate_card_proposals.update({
+    where: { id: row.id },
+    data: {
+      status: "approved",
+      submittedAt: row.submittedAt || now,
+      approvedAt: now,
+      approvedByUserId: user.id,
+      returnedComment: null,
+      updatedAt: now,
+    },
+    include: includeActivity,
+  });
+  await promoteToStanding(updated, user.id);
+  return serialize(updated);
+}
+
 exports.submit = async (user, id) => {
   assertCanEditFarmRates(user);
   const row = await getOrThrow(id);
   await loadFarmForUser(user, row.farmEstateId);
-  if (row.archivedAt) throw new AppError(409, "ARCHIVED", "Archived rate cards cannot be submitted");
+  if (row.archivedAt) throw new AppError(409, "ARCHIVED", "Archived rate cards cannot be published");
   if (row.status !== "draft" && row.status !== "returned") {
-    throw new AppError(409, "INVALID_STATE", "Only draft or returned rate cards can be submitted");
+    throw new AppError(409, "INVALID_STATE", "Only draft rate cards can be published");
   }
-  if (!row.availableFrom) {
-    throw new AppError(400, "VALIDATION_ERROR", "Effective from date is required before submit");
-  }
-  const { flagged } = varianceFields(num(row.proposedRate), num(row.recommendedRate));
-  if (flagged && !String(row.justificationNote || "").trim()) {
-    throw new AppError(400, "JUSTIFICATION_REQUIRED", "Justification is required when variance is flagged (±10%)");
-  }
-
-  const updated = await prisma.rate_card_proposals.update({
-    where: { id },
-    data: { status: "submitted", submittedAt: new Date(), updatedAt: new Date() },
-    include: includeActivity,
-  });
-
-  try {
-    await notifications.notifyRateCardProposalSubmitted(row.programId, updated);
-  } catch (err) {
-    console.error("[rate-card-proposal] notify submit failed:", err?.message || err);
-  }
-
-  return serialize(updated);
+  return publish(user, row);
 };
 
+/** Publishes a card left in "submitted" from before approvals were removed. */
 exports.approve = async (user, id) => {
-  assertDecide(user);
+  assertCanEditFarmRates(user);
   const row = await getOrThrow(id);
   await loadFarmForUser(user, row.farmEstateId);
-  if (row.archivedAt) throw new AppError(409, "ARCHIVED", "Archived rate cards cannot be approved");
+  if (row.archivedAt) throw new AppError(409, "ARCHIVED", "Archived rate cards cannot be published");
   if (row.status !== "submitted") {
-    throw new AppError(409, "INVALID_STATE", "Only submitted rate cards can be approved");
+    throw new AppError(409, "INVALID_STATE", "Only submitted rate cards can be published this way");
   }
-
-  const updated = await prisma.rate_card_proposals.update({
-    where: { id },
-    data: {
-      status: "approved",
-      approvedAt: new Date(),
-      approvedByUserId: user.id,
-      updatedAt: new Date(),
-    },
-    include: includeActivity,
-  });
-
-  await promoteToStanding(updated, user.id);
-
-  try {
-    await notifications.notifyRateCardProposalDecision(row.programId, updated, "approved", user.name);
-  } catch (err) {
-    console.error("[rate-card-proposal] notify approve failed:", err?.message || err);
-  }
-
-  return serialize(updated);
+  return publish(user, row);
 };
 
 exports.reject = async (user, id, comment) => {
@@ -526,8 +607,17 @@ exports.reject = async (user, id, comment) => {
   return serialize(updated);
 };
 
+/** SPX (who publishes rate cards) or the asset owner can retire one. */
+function assertCanArchive(user) {
+  try {
+    assertCanEditFarmRates(user);
+  } catch {
+    assertDecide(user);
+  }
+}
+
 exports.archive = async (user, id) => {
-  assertDecide(user);
+  assertCanArchive(user);
   const row = await getOrThrow(id);
   await loadFarmForUser(user, row.farmEstateId);
   if (row.archivedAt) return serialize(row);

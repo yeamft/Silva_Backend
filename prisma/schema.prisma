@@ -55,6 +55,9 @@ model programs {
   cropfortPartialWeeklyRelease  Boolean                     @default(false)
   cropfortRateFlagThresholdPct  Decimal                     @default(10) @db.Decimal(5, 2)
   cropfortVarianceReviewPct     Decimal                     @default(20) @db.Decimal(5, 2)
+  /// Rate scenario bands above the industry average, in % (template Settings: Band 1 / Band 2)
+  cropfortScenarioBand1Pct      Decimal                     @default(25) @db.Decimal(5, 2)
+  cropfortScenarioBand2Pct      Decimal                     @default(50) @db.Decimal(5, 2)
   accountability_matrix         accountability_matrix[]
   activity_catalog              activity_catalog[]
   activity_master               activity_master[]
@@ -721,6 +724,9 @@ model rate_card_proposals {
   sourceSurveyId                                     String?
   recommendedRate                                    Decimal?           @db.Decimal(14, 4)
   proposedRate                                       Decimal            @db.Decimal(14, 4)
+  /// industry_average | plus_25 | plus_50 | expert_input — the scenario used as the Chaka Buna plan rate
+  planBasis                                          String             @default("expert_input")
+  expertRate                                         Decimal?           @db.Decimal(14, 4)
   norm                                               Decimal?           @db.Decimal(14, 6)
   fallbackRate                                       Decimal?           @db.Decimal(14, 4)
   sourceBasis                                        String             @default("")
@@ -959,6 +965,8 @@ model cropfort_programme_plan_lines {
   scope             String                     @default("block")
   included          Boolean                    @default(false)
   plannedQty        Decimal                    @default(0) @db.Decimal(14, 4)
+  /// Times per year (planning assumption); annual quantity = plannedQty × frequency
+  frequency         Decimal                    @default(1) @db.Decimal(8, 2)
   unitRateEtb       Decimal?                   @db.Decimal(14, 4)
   normMdPerUnit     Decimal?                   @db.Decimal(14, 6)
   rateCardId        String?
